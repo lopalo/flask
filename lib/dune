@@ -1,0 +1,5 @@
+(library
+ (name flask)
+ (libraries lwt angstrom-lwt-unix)
+ (preprocess
+  (pps lwt_ppx)))

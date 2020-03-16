@@ -1,0 +1,11 @@
+(executable
+ (name server)
+ (public_name flask-server)
+ (modules server)
+ (libraries flask))
+
+(executable
+ (name client)
+ (public_name flask-cli)
+ (modules client)
+ (libraries flask))

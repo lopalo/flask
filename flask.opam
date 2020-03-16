@@ -1,0 +1,23 @@
+opam-version: "2.0"
+name: "flask"
+version: "~dev"
+synopsis: "Persistent key-value storage"
+maintainer: "Vlad Lopalo"
+authors: "Vlad Lopalo"
+depends: [
+  "dune" {>= "1.11.4"}
+  "ocaml-base-compiler" {= "4.10.0"}
+
+  "lwt" {= "5.2.0"}
+  "lwt_ppx" {= "2.0.1"}
+  "angstrom-lwt-unix" {= "0.12.1"}
+
+  "merlin" {>= "3.3.2"}
+  "ocamlformat" {>= "0.11.0"}
+  "ocp-indent" {>= "1.8.1"}
+  "utop" {>= "2.4.2"}
+]
+build: [
+  ["dune" "subst"] {pinned}
+  ["dune" "build" "-p" name "-j" jobs]
+]
