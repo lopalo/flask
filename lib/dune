@@ -1,5 +1,5 @@
 (library
  (name flask)
- (libraries lwt angstrom-lwt-unix)
+ (libraries lwt angstrom-lwt-unix faraday-lwt-unix logs.lwt)
  (preprocess
   (pps lwt_ppx)))

@@ -2,10 +2,14 @@
  (name server)
  (public_name flask-server)
  (modules server)
- (libraries flask))
+ (libraries flask)
+ (preprocess
+  (pps lwt_ppx)))
 
 (executable
  (name client)
  (public_name flask-cli)
  (modules client)
- (libraries flask))
+ (libraries flask)
+ (preprocess
+  (pps lwt_ppx)))

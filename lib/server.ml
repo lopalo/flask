@@ -1,4 +1,6 @@
 module H = Hashtbl
+module P = Protocol
+open Lwt.Infix
 
 type config =
   { host : string;
@@ -18,30 +20,32 @@ let set_value state key value = H.replace state.storage key value
 
 let get_value state key =
   match H.find_opt state.storage key with
-  | Some v -> v
-  | None -> "nil"
+  | Some v -> P.String v
+  | None -> Nil
 
 let delete_value state key = H.remove state.storage key
 
 let handle_command state = function
-  | ["set"; key; value] -> set_value state key value; "Ok"
-  | ["get"; key] -> get_value state key
-  | ["del"; key] -> delete_value state key; "Ok"
-  | _ -> "Invalid command"
+  | P.Set {key; value} -> set_value state key value; Ok P.Nil
+  | Get {key} -> Ok (get_value state key)
+  | Delete {key} -> delete_value state key; Ok P.Nil
 
-let rec connection_handler state ((input, output) as channel) =
-  let%lwt line = Lwt_io.read_line input in
-  let command =
-    String.split_on_char ' ' line |> List.filter (fun s -> s <> "")
-  in
-  let response = handle_command state command in
-  let%lwt _ = Lwt_io.write_line output response in
-  connection_handler state channel
+let handle_request state fd ({id; command} : P.request) =
+  P.write_response_to_fd {id; result = handle_command state command} fd
+
+let connection_handler state fd =
+  Lwt.catch
+    (fun () -> P.read_request_from_fd (handle_request state fd) fd >|= ignore)
+    (function
+      | Unix.Unix_error (Unix.ECONNRESET, "read", "") -> Lwt.return ()
+      | exn -> Lwt.fail exn)
 
 let run_server config =
   let state = create_state config in
-  let address =
-    Lwt_unix.ADDR_INET (Unix.inet_addr_of_string config.host, config.port)
-  in
-  let conn_handler _ channel = connection_handler state channel in
-  Lwt_io.establish_server_with_client_address address conn_handler
+  let {host; port; _} = config in
+  let address = Lwt_unix.ADDR_INET (Unix.inet_addr_of_string host, port) in
+  let conn_handler _ connection = connection_handler state connection in
+  Logs_lwt.info (fun m -> m "Listen for connections on %s:%i" host port)
+  >>= fun () ->
+  Lwt_io.establish_server_with_client_socket ~no_close:false address
+    conn_handler
