@@ -1,5 +1,3 @@
-module F = Faraday
-
 type command =
   | Set of
       { key : string;
@@ -13,7 +11,10 @@ type request =
 
 type value =
   | Nil
-  | String of string
+  | One of string
+
+(* TODO: *)
+(* | Many of string list *)
 
 type error = ResponseError of string [@@unboxed]
 
@@ -21,56 +22,56 @@ type response =
   { id : int;
     result : (value, error) result }
 
-let yield _ = Lwt.return ()
+open Lwt.Infix
 
-let write_short_string serializer str =
-  F.write_uint8 serializer (String.length str);
-  F.write_string serializer str
+let write_uint8 oc i = Lwt_io.write_char oc (Char.unsafe_chr i)
 
-let write_long_string serializer str =
-  String.length str |> Int32.of_int |> F.BE.write_uint32 serializer;
-  F.write_string serializer str
+let write_short_string oc str =
+  write_uint8 oc (String.length str) >>= fun () -> Lwt_io.write oc str
 
-let serialize_request serializer {id; command} =
-  F.BE.write_uint64 serializer @@ Int64.of_int id;
-  F.write_uint8 serializer
+let write_long_string oc str =
+  String.length str |> Int32.of_int |> Lwt_io.BE.write_int32 oc
+  >>= fun () -> Lwt_io.write oc str
+
+let write_request oc {id; command} =
+  Lwt_io.BE.write_int64 oc @@ Int64.of_int id
+  >>= fun () ->
+  write_uint8 oc
     (match command with
     | Set _ -> 0
     | Get _ -> 1
-    | Delete _ -> 2);
+    | Delete _ -> 2)
+  >>= fun () ->
   match command with
   | Set {key; value} ->
-      write_short_string serializer key;
-      write_long_string serializer value
-  | Get {key} -> write_short_string serializer key
-  | Delete {key} -> write_short_string serializer key
+      write_short_string oc key >>= fun () -> write_long_string oc value
+  | Get {key} -> write_short_string oc key
+  | Delete {key} -> write_short_string oc key
 
-let serialize_response serializer {id; result} =
-  F.BE.write_uint64 serializer @@ Int64.of_int id;
+let write_response oc {id; result} =
+  Lwt_io.BE.write_int64 oc @@ Int64.of_int id
+  >>= fun () ->
   match result with
   | Ok result -> (
-      F.write_uint8 serializer 0;
-      F.write_uint8 serializer
+      write_uint8 oc 0
+      >>= fun () ->
+      write_uint8 oc
         (match result with
         | Nil -> 0
-        | String _ -> 1);
+        | One _ -> 1)
+      >>= fun () ->
       match result with
-      | Nil -> ()
-      | String s -> write_long_string serializer s)
+      | Nil -> Lwt.return_unit
+      | One s -> write_long_string oc s)
   | Error (ResponseError error) ->
-      F.write_uint8 serializer 1;
-      write_short_string serializer error
+      write_uint8 oc 1 >>= fun () -> write_short_string oc error
 
-let write_to_fd serialize_fn data fd =
-  let serializer = F.create 512 in
-  let writev = Faraday_lwt_unix.writev_of_fd fd in
-  serialize_fn serializer data;
-  F.close serializer;
-  Faraday_lwt.serialize ~yield ~writev serializer
+let write_message message_writer output_channel msg =
+  Lwt_io.atomic (fun oc -> message_writer oc msg) output_channel
 
-let write_request_to_fd = write_to_fd serialize_request
+let write_request_message = write_message write_request
 
-let write_response_to_fd = write_to_fd serialize_response
+let write_response_message = write_message write_response
 
 open Angstrom
 
@@ -97,20 +98,20 @@ let result_parser =
       any_uint8
       >>= (function
             | 0 -> return Nil
-            | 1 -> long_string >>| fun s -> String s
-            | n -> fail @@ "Unknown result tag: " ^ string_of_int n)
+            | 1 -> long_string >>| fun s -> One s
+            | n -> fail @@ "Unknown value tag: " ^ string_of_int n)
       >>| fun value -> Ok value
   | 1 -> short_string >>| fun error -> Error (ResponseError error)
-  | n -> fail @@ "Unknown status tag: " ^ string_of_int n
+  | n -> fail @@ "Unknown result tag: " ^ string_of_int n
 
 let response_parser =
   (fun id result -> {id = Int64.to_int id; result})
   <$> BE.any_int64 <*> result_parser
 
-let read_from_fd parser handler fd =
-  let input_channel = Lwt_io.of_fd ~mode:Lwt_io.input fd in
-  Angstrom_lwt_unix.parse_many parser handler input_channel
+let read parser input_channel handler =
+  try%lwt Angstrom_lwt_unix.parse_many parser handler input_channel >|= ignore
+  with Unix.Unix_error (Unix.ECONNRESET, "read", "") -> Lwt.return_unit
 
-let read_request_from_fd = read_from_fd request_parser
+let read_request = read request_parser
 
-let read_response_from_fd = read_from_fd response_parser
+let read_response = read response_parser

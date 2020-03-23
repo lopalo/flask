@@ -12,7 +12,6 @@ depends: [
   "lwt" {= "5.2.0"}
   "lwt_ppx" {= "2.0.1"}
   "angstrom-lwt-unix" {= "0.12.1"}
-  "faraday-lwt-unix" {= "0.7.1"}
   "logs" {= "0.7.0"}
 
   "merlin" {>= "3.3.2"}
