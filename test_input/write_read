@@ -1,0 +1,11 @@
+SET xxx aaaaaaaaaaaa
+SET yyy bbbbbb
+SET zzz cccccccccccccc
+
+GET yyy
+GET NNN
+GET xxx
+GET zzz
+
+DEL zzz
+GET zzz

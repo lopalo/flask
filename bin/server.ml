@@ -6,14 +6,11 @@ let exception_hook exn =
   ignore @@ Logs_lwt.err (fun m -> m "%s%s" message stack)
 
 let () =
+  let config = Flask.Config.read () in
   let open Flask.Server in
-  let config = Flask.Config.create () in
-  (* TODO: read 'log_level' config *)
-  let log_level = Logs.Info in
   Logs.(set_reporter (format_reporter ()));
-  Logs.set_level (Some log_level);
+  Logs.set_level config.log_level;
   Lwt_engine.(set (new libev ~backend:Ev_backend.epoll ()));
   Lwt.async_exception_hook := exception_hook;
-  (* TODO: set config from a file and args *)
   let _server = run_server config in
   Lwt_main.run (forever ())
