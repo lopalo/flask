@@ -18,9 +18,11 @@ type value =
 
 type error = ResponseError of string [@@unboxed]
 
+type cmd_result = (value, error) result
+
 type response =
   { id : int;
-    result : (value, error) result }
+    result : cmd_result }
 
 val write_request_message : Lwt_io.output_channel -> request -> unit Lwt.t
 

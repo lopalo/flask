@@ -3,3 +3,4 @@ _build/
 .merlin
 Session.vim
 flask.install
+data/*

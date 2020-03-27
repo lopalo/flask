@@ -79,7 +79,5 @@ let () =
       ("-p", Set_string port, "Server port. Default: " ^ !port) ]
   in
   let usage = "flask-cli [options]" in
-  parse specs
-    (fun arg -> raise @@ Bad ("Unexpected argument: " ^ arg))
-    usage;
+  parse specs (fun arg -> raise @@ Bad ("Unexpected argument: " ^ arg)) usage;
   Lwt_main.run (run_client !is_interactive !host !port)
