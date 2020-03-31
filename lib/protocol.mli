@@ -4,6 +4,7 @@ type command =
         value : string }
   | Get of {key : string}
   | Delete of {key : string}
+  | Flush
 
 type request =
   { id : int;

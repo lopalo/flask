@@ -6,6 +6,7 @@ type command =
         value : string }
   | Get of {key : string}
   | Delete of {key : string}
+  | Flush
 
 type request =
   { id : int;
@@ -35,13 +36,15 @@ let write_request oc {id; command} =
     (match command with
     | Set _ -> 0
     | Get _ -> 1
-    | Delete _ -> 2)
+    | Delete _ -> 2
+    | Flush -> 3)
   >>= fun () ->
   match command with
   | Set {key; value} ->
       U.write_short_string oc key >>= fun () -> U.write_long_string oc value
   | Get {key} -> U.write_short_string oc key
   | Delete {key} -> U.write_short_string oc key
+  | Flush -> Lwt.return_unit
 
 let write_response oc {id; result} =
   Lwt_io.BE.write_int64 oc @@ Int64.of_int id
@@ -78,6 +81,7 @@ let command_parser =
       <$> U.short_string_parser <*> U.long_string_parser
   | 1 -> U.short_string_parser >>| fun key -> Get {key}
   | 2 -> U.short_string_parser >>| fun key -> Delete {key}
+  | 3 -> return Flush
   | n -> fail @@ "Unknown command tag: " ^ string_of_int n
 
 let request_parser =

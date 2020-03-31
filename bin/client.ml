@@ -29,6 +29,7 @@ let make_command line =
   | ["set"; key; value] -> Some (P.Set {key; value})
   | ["get"; key] -> Some (Get {key})
   | ["del"; key] -> Some (Delete {key})
+  | ["flush"] -> Some Flush
   | _ -> None
 
 let run_client is_interactive host port =

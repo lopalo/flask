@@ -3,7 +3,7 @@ type t =
     host : string;
     port : int;
     data_directory : string;
-    fsync_period : int }
+    log_fsync_period : int }
 
 let read () =
   let open Arg in
@@ -13,7 +13,7 @@ let read () =
   let host = ref "127.0.0.1" in
   let port = ref 14777 in
   let data_directory = ref "./data/" in
-  let fsync_period = ref 100 in
+  let log_fsync_period = ref 100 in
   let log_level_spec str =
     match Logs.level_of_string str with
     | Ok level -> log_level := level
@@ -31,5 +31,5 @@ let read () =
   { log_level = !log_level;
     host = !host;
     port = !port;
-    fsync_period = !fsync_period;
+    log_fsync_period = !log_fsync_period;
     data_directory = !data_directory }
