@@ -14,9 +14,6 @@ type value =
   | Nil
   | One of string
 
-(* TODO: *)
-(* | Many of string list *)
-
 type error = ResponseError of string [@@unboxed]
 
 type cmd_result = (value, error) result
