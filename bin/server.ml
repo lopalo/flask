@@ -1,7 +1,7 @@
 let exception_hook exn =
   let message = Printexc.to_string exn in
-  let stack = Printexc.get_backtrace () in
-  Logs.err (fun m -> m "%s%s" message stack)
+  let trace = Printexc.get_backtrace () in
+  Logs.err (fun m -> m "%s %s" message trace)
 
 let () =
   let config = Flask.Config.read () in

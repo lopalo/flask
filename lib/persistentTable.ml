@@ -6,9 +6,9 @@ module FU = FileUtil
 
 type level = Lwt_io.input_channel
 
-type levels = level list
-
-type t = levels ref
+type t =
+  { mutable levels : level list;
+    write_mutex : Lwt_mutex.t }
 
 type key_record =
   { key_offset : int64;
@@ -77,42 +77,45 @@ let write_records channel storage =
   done
 
 let flush_memory_table directory persistent_table log memtable =
-  let storage = ref (H.create 0) in
-  let switch () =
-    let s = memtable.storage in
-    memtable.storage <- H.create (H.length s);
-    memtable.previous_storage <- Some s;
-    storage := s
-  in
-  PersistentLog.advance log switch
-  >>= fun truncate_log ->
-  FU.next_file_name file_extension directory
-  >>= fun (file_name, _) ->
-  let temp_file_name = file_name ^ "_temp" in
-  FU.open_output_file ~replace:true temp_file_name
-  >>= fun (fd, output_channel) ->
-  write_records output_channel !storage
-  >>= fun () ->
-  Lwt_io.flush output_channel
-  >>= fun () ->
-  Lwt_unix.fsync fd
-  >>= fun () ->
-  Lwt_io.close output_channel
-  >>= fun () ->
-  Lwt_unix.rename temp_file_name file_name
-  >>= fun () ->
-  Lwt_io.(open_file ~mode:input file_name)
-  >|= (fun input_channel ->
-        persistent_table := input_channel :: !persistent_table;
-        memtable.previous_storage <- None)
-  >>= truncate_log
+  Lwt_mutex.with_lock persistent_table.write_mutex (fun () ->
+      let storage = ref (H.create 0) in
+      let switch () =
+        let s = memtable.storage in
+        memtable.storage <- H.create (H.length s);
+        memtable.previous_storage <- Some s;
+        storage := s
+      in
+      PersistentLog.advance log switch
+      >>= fun truncate_log ->
+      FU.next_file_name file_extension directory
+      >>= fun (file_name, _) ->
+      let temp_file_name = file_name ^ "_temp" in
+      FU.open_output_file ~replace:true temp_file_name
+      >>= fun (fd, output_channel) ->
+      write_records output_channel !storage
+      >>= fun () ->
+      Lwt_io.flush output_channel
+      >>= fun () ->
+      Lwt_unix.fsync fd
+      >>= fun () ->
+      Lwt_io.close output_channel
+      >>= fun () ->
+      Lwt_unix.rename temp_file_name file_name
+      >>= fun () ->
+      Lwt_io.(open_file ~mode:input file_name)
+      >|= (fun input_channel ->
+            persistent_table.levels <- input_channel :: persistent_table.levels;
+            memtable.previous_storage <- None)
+      >>= truncate_log
+      >|= fun () -> H.length !storage)
 
 let initialize directory =
   FU.find_ordered_file_names file_extension directory
   >>= fun file_names ->
   let open_file file_name = Lwt_io.(open_file ~mode:input file_name) in
   FU.FileNames.bindings file_names
-  |> List.map snd |> List.rev |> Lwt_list.map_s open_file >|= ref
+  |> List.map snd |> List.rev |> Lwt_list.map_s open_file
+  >|= fun levels -> {levels; write_mutex = Lwt_mutex.create ()}
 
 let read_exactly input_channel length =
   let buffer = Bytes.create length in
@@ -180,5 +183,5 @@ let rec pull_value_from_levels key = function
       | None -> pull_value_from_levels key levels)
 
 let rec pull_value persistent_level key =
-  try%lwt pull_value_from_levels key !persistent_level
+  try%lwt pull_value_from_levels key persistent_level.levels
   with Lwt_io.Channel_closed _ -> pull_value persistent_level key

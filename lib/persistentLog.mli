@@ -3,7 +3,7 @@ type t
 val read_records :
   string -> (Common.key * Common.value -> unit Lwt.t) -> unit Lwt.t
 
-val write_record : t -> Common.key -> Common.value -> unit Lwt.t
+val write_record : t -> Common.key -> Common.value -> unit Lwt.t Lwt.t
 
 val initialize : string -> t Lwt.t
 

@@ -8,7 +8,7 @@ type state =
     number : int;
     fd : Lwt_unix.file_descr;
     output_channel : Lwt_io.output Lwt_io.channel;
-    mutable fsync_waiters : unit Lwt.u list }
+    mutable fsync_task : unit Lwt.t * unit Lwt.u }
 
 type t = state ref
 
@@ -16,24 +16,20 @@ let file_extension = "log"
 
 let write_record log (Key key) value =
   let log_state = !log in
-  let promise, resolver = Lwt.task () in
-  ignore
-  @@ Lwt_io.atomic
-       (fun oc ->
-         U.write_short_string oc key
-         >>= fun () ->
-         U.write_uint8 oc
-           (match value with
-           | Nothing -> 0
-           | Value _ -> 1)
-         >>= fun () ->
-         (match value with
-         | Nothing -> Lwt.return_unit
-         | Value v -> U.write_long_string oc v)
-         >|= fun () ->
-         log_state.fsync_waiters <- resolver :: log_state.fsync_waiters)
-       log_state.output_channel;
-  promise
+  Lwt_io.atomic
+    (fun oc ->
+      U.write_short_string oc key
+      >>= fun () ->
+      U.write_uint8 oc
+        (match value with
+        | Nothing -> 0
+        | Value _ -> 1)
+      >>= fun () ->
+      (match value with
+      | Nothing -> Lwt.return_unit
+      | Value v -> U.write_long_string oc v)
+      >|= fun () -> fst log_state.fsync_task)
+    log_state.output_channel
 
 let record_parser =
   let open Angstrom in
@@ -60,17 +56,19 @@ let read_records directory reader =
 let initialize directory =
   FU.open_next_output_file ~replace:false file_extension directory
   >|= fun {fd; output_channel; number; _} ->
-  ref {directory; number; fd; output_channel; fsync_waiters = []}
+  ref {directory; number; fd; output_channel; fsync_task = Lwt.wait ()}
 
 let synchornize log_state =
-  Lwt_io.flush log_state.output_channel
-  >>= fun () ->
-  let waiters = log_state.fsync_waiters in
-  log_state.fsync_waiters <- [];
-  Lwt_unix.fsync log_state.fd
-  >>= fun () ->
-  List.(rev waiters |> iter (fun w -> Lwt.wakeup_later w ()));
-  Lwt.return_unit
+  Lwt_io.atomic
+    (fun oc ->
+      Lwt_io.flush oc
+      >>= fun () ->
+      let fsync_resolver = snd log_state.fsync_task in
+      log_state.fsync_task <- Lwt.wait ();
+      Lwt.return fsync_resolver)
+    log_state.output_channel
+  >>= fun fsync_resolver ->
+  Lwt_unix.fsync log_state.fd >|= fun () -> Lwt.wakeup_later fsync_resolver ()
 
 let truncate_files directory current_number () =
   FU.find_ordered_file_names file_extension directory
