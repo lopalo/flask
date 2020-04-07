@@ -91,8 +91,4 @@ let advance log switch_callback =
   >|= fun () -> truncate_files dir new_log_state.number
 
 let run_synchronizer (config : Config.t) log =
-  let period = U.seconds config.log_fsync_period in
-  let rec loop () =
-    Lwt_unix.sleep period >>= fun () -> synchornize !log >>= fun () -> loop ()
-  in
-  loop ()
+  U.run_periodically config.log_fsync_period (fun () -> synchornize !log)

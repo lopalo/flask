@@ -20,3 +20,25 @@ let is_valid_key_length (Key k) = String.length k <= max_key_length
 let is_valid_value_length = function
   | Value v -> String.length v <= max_value_length
   | Nothing -> true
+
+let max_value_weight = 100
+
+let value_weight_fraction = max_value_length / max_value_weight
+
+module Key = struct
+  type t = key
+
+  let equal = ( = )
+
+  let hash = Hashtbl.hash
+end
+
+module Value = struct
+  type t = value
+
+  let weight = function
+    | Nothing -> 1
+    | Value v ->
+        let weight = String.length v / value_weight_fraction in
+        min max_value_weight (max 1 weight)
+end

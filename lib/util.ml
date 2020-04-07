@@ -1,6 +1,8 @@
+module C = Config
+
 let rec forever () = Lwt.bind (Lwt_unix.sleep 60.) (fun _ -> forever ())
 
-let seconds milliseconds = Float.of_int milliseconds /. 1000.0
+let seconds {C.milliseconds} = {C.seconds = Float.of_int milliseconds /. 1000.0}
 
 open Lwt.Infix
 
@@ -12,6 +14,14 @@ let write_short_string oc str =
 let write_long_string oc str =
   String.length str |> Int32.of_int |> Lwt_io.BE.write_int32 oc
   >>= fun () -> Lwt_io.write oc str
+
+let run_periodically milliseconds f =
+  let period = seconds milliseconds in
+  let rec loop () =
+    let sleep = Lwt_unix.sleep period.seconds in
+    f () >>= fun () -> sleep >>= loop
+  in
+  loop ()
 
 open Angstrom
 

@@ -1,9 +1,11 @@
 module H = Hashtbl
 module P = Protocol
+module U = Util
 module PL = PersistentLog
 module PT = PersistentTable
 open Lwt.Infix
 open Common
+module ReadCache = Lru.M.Make (Key) (Value)
 
 type state =
   { config : Config.t;
@@ -11,8 +13,7 @@ type state =
     persistent_log : PL.t;
     persistent_table : PT.t;
     pull_operations : (key, unit Lwt.t) H.t;
-    (* TODO: mutable multi-value lru cache *)
-    read_cache : (key, value) H.t }
+    read_cache : ReadCache.t }
 
 type command_result =
   | Done of P.cmd_result
@@ -35,7 +36,7 @@ let initialize_state (config : Config.t) =
   >>= fun persistent_table ->
   let memory_table = {storage; previous_storage = None} in
   let pull_operations = H.create 256 in
-  let read_cache = H.create 4096 in
+  let read_cache = ReadCache.create config.read_cache_capacity in
   Lwt.return
     { config;
       memory_table;
@@ -57,13 +58,19 @@ let set_value
         H.replace storage key value;
         Some (PL.write_record persistent_log key value)
   in
-  H.remove read_cache key;
+  ReadCache.remove key read_cache;
   (match H.find_opt pull_operations key with
   | Some pull_op ->
       H.remove pull_operations key;
       Lwt.cancel pull_op
   | None -> ());
   result
+
+let get_from_cache read_cache key =
+  let open ReadCache in
+  let res = find key read_cache in
+  if Option.is_some res then promote key read_cache;
+  res
 
 let get_value {memory_table = {storage; previous_storage; _}; read_cache; _} key
     =
@@ -75,8 +82,8 @@ let get_value {memory_table = {storage; previous_storage; _}; read_cache; _} key
     | Some s -> (
       match H.find_opt s key with
       | Some _ as v -> v
-      | None -> H.find_opt read_cache key)
-    | None -> H.find_opt read_cache key)
+      | None -> get_from_cache read_cache key)
+    | None -> get_from_cache read_cache key)
 
 let delete_value state key = set_value state key Nothing
 
@@ -132,7 +139,7 @@ let rec handle_request state oc ({id; command} as req : P.request) =
                    match H.find_opt operations key with
                    | Some o when o == !op ->
                        H.remove operations key;
-                       H.replace state.read_cache key value
+                       ReadCache.add key value state.read_cache
                    | Some _
                    | None ->
                        ());
@@ -148,10 +155,15 @@ let rec handle_request state oc ({id; command} as req : P.request) =
 let connection_handler state (ic, oc) =
   P.read_request ic (handle_request state oc)
 
+let run_read_cache_trimmer {read_cache; _} =
+  U.run_periodically {milliseconds = 1000} (fun () ->
+      ReadCache.trim read_cache; Lwt.return_unit)
+
 let run_server config =
   initialize_state config
   >>= fun state ->
-  let synchronizer = PL.run_synchronizer config state.persistent_log in
+  let log_synchronizer = PL.run_synchronizer config state.persistent_log in
+  let read_cache_trimmer = run_read_cache_trimmer state in
   let ({host; port; _} : Config.t) = config in
   let address = Lwt_unix.ADDR_INET (Unix.inet_addr_of_string host, port) in
   let conn_handler _ connection = connection_handler state connection in
@@ -161,7 +173,8 @@ let run_server config =
   >|= fun tcp_server ->
   { shutdown =
       lazy
-        (Lwt.cancel synchronizer;
+        (Lwt.cancel log_synchronizer;
+         Lwt.cancel read_cache_trimmer;
          Lwt_io.shutdown_server tcp_server) }
 
 let shutdown_server server = Lazy.force server.shutdown
