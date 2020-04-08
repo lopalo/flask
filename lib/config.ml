@@ -1,6 +1,5 @@
-type milliseconds = {milliseconds : int} [@@unboxed]
-
-type seconds = {seconds : float} [@@unboxed]
+open Common
+module U = Util
 
 type t =
   { log_level : Logs.level option;
@@ -8,6 +7,7 @@ type t =
     port : int;
     data_directory : string;
     log_fsync_period : milliseconds;
+    log_size_threshold : bytes;
     read_cache_capacity : int }
 
 let read () =
@@ -18,7 +18,8 @@ let read () =
   let host = ref "127.0.0.1" in
   let port = ref 14777 in
   let data_directory = ref "./data/" in
-  let log_fsync_period = ref 100 in
+  let log_fsync_period_ms = ref 100 in
+  let log_size_threshold_mb = ref 10 in
   let read_cache_capacity = ref 1000 in
   let log_level_spec str =
     match Logs.level_of_string str with
@@ -38,5 +39,6 @@ let read () =
     host = !host;
     port = !port;
     data_directory = !data_directory;
-    log_fsync_period = {milliseconds = !log_fsync_period};
+    log_fsync_period = {milliseconds = !log_fsync_period_ms};
+    log_size_threshold = U.bytes !log_size_threshold_mb;
     read_cache_capacity = !read_cache_capacity }

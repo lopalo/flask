@@ -159,11 +159,20 @@ let run_read_cache_trimmer {read_cache; _} =
   U.run_periodically {milliseconds = 1000} (fun () ->
       ReadCache.trim read_cache; Lwt.return_unit)
 
+let run_flusher ({config = {data_directory; log_size_threshold; _}; _} as state)
+    =
+  U.run_periodically {milliseconds = 1000} (fun () ->
+      PL.files_size data_directory
+      >>= fun {bytes} ->
+      if bytes > log_size_threshold.bytes then flush state >|= ignore
+      else Lwt.return_unit)
+
 let run_server config =
   initialize_state config
   >>= fun state ->
   let log_synchronizer = PL.run_synchronizer config state.persistent_log in
   let read_cache_trimmer = run_read_cache_trimmer state in
+  let flusher = run_flusher state in
   let ({host; port; _} : Config.t) = config in
   let address = Lwt_unix.ADDR_INET (Unix.inet_addr_of_string host, port) in
   let conn_handler _ connection = connection_handler state connection in
@@ -175,6 +184,7 @@ let run_server config =
       lazy
         (Lwt.cancel log_synchronizer;
          Lwt.cancel read_cache_trimmer;
+         Lwt.cancel flusher;
          Lwt_io.shutdown_server tcp_server) }
 
 let shutdown_server server = Lazy.force server.shutdown

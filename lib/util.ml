@@ -1,8 +1,10 @@
-module C = Config
+open Common
 
 let rec forever () = Lwt.bind (Lwt_unix.sleep 60.) (fun _ -> forever ())
 
-let seconds {C.milliseconds} = {C.seconds = Float.of_int milliseconds /. 1000.0}
+let seconds {milliseconds} = {seconds = Float.of_int milliseconds /. 1000.0}
+
+let bytes megabytes = {bytes = megabytes * 1024 * 1024}
 
 open Lwt.Infix
 

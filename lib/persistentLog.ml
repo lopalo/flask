@@ -92,3 +92,13 @@ let advance log switch_callback =
 
 let run_synchronizer (config : Config.t) log =
   U.run_periodically config.log_fsync_period (fun () -> synchornize !log)
+
+let files_size directory =
+  FU.find_ordered_file_names file_extension directory
+  >>= fun file_names ->
+  let add size file_name =
+    Lwt_unix.stat file_name >|= fun {st_size; _} -> size + st_size
+  in
+  FU.FileNames.bindings file_names
+  |> List.map snd |> Lwt_list.fold_left_s add 0
+  >|= fun size -> {bytes = size}

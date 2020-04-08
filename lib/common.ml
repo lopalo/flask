@@ -1,3 +1,9 @@
+type milliseconds = {milliseconds : int} [@@unboxed]
+
+type seconds = {seconds : float} [@@unboxed]
+
+type bytes = {bytes : int} [@@unboxed]
+
 type key = Key of string [@@unboxed]
 
 type value =

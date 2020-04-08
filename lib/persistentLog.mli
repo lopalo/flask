@@ -10,3 +10,5 @@ val initialize : string -> t Lwt.t
 val advance : t -> (unit -> unit) -> (unit -> unit Lwt.t) Lwt.t
 
 val run_synchronizer : Config.t -> t -> 'a Lwt.t
+
+val files_size : string -> Common.bytes Lwt.t
