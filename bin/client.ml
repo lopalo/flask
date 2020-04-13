@@ -30,6 +30,7 @@ let make_command line =
   | ["get"; key] -> Some (Get {key})
   | ["del"; key] -> Some (Delete {key})
   | ["flush"] -> Some Flush
+  | ["compact"] -> Some Compact
   | _ -> None
 
 let run_client is_interactive host port =

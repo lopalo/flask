@@ -7,6 +7,7 @@ type command =
   | Get of {key : string}
   | Delete of {key : string}
   | Flush
+  | Compact
 
 type request =
   { id : int;
@@ -37,7 +38,8 @@ let write_request oc {id; command} =
     | Set _ -> 0
     | Get _ -> 1
     | Delete _ -> 2
-    | Flush -> 3)
+    | Flush -> 3
+    | Compact -> 4)
   >>= fun () ->
   match command with
   | Set {key; value} ->
@@ -45,6 +47,7 @@ let write_request oc {id; command} =
   | Get {key} -> U.write_short_string oc key
   | Delete {key} -> U.write_short_string oc key
   | Flush -> Lwt.return_unit
+  | Compact -> Lwt.return_unit
 
 let write_response oc {id; result} =
   Lwt_io.BE.write_int64 oc @@ Int64.of_int id
@@ -71,44 +74,47 @@ let write_request_message = write_message write_request
 
 let write_response_message = write_message write_response
 
-open Angstrom
+module Parser = struct
+  open Angstrom
 
-let command_parser =
-  any_uint8
-  >>= function
-  | 0 ->
-      (fun key value -> Set {key; value})
-      <$> U.short_string_parser <*> U.long_string_parser
-  | 1 -> U.short_string_parser >>| fun key -> Get {key}
-  | 2 -> U.short_string_parser >>| fun key -> Delete {key}
-  | 3 -> return Flush
-  | n -> fail @@ "Unknown command tag: " ^ string_of_int n
+  let command =
+    any_uint8
+    >>= function
+    | 0 ->
+        (fun key value -> Set {key; value})
+        <$> U.Parser.short_string <*> U.Parser.long_string
+    | 1 -> U.Parser.short_string >>| fun key -> Get {key}
+    | 2 -> U.Parser.short_string >>| fun key -> Delete {key}
+    | 3 -> return Flush
+    | 4 -> return Compact
+    | n -> failwith @@ "Unknown command tag: " ^ string_of_int n
 
-let request_parser =
-  (fun id command -> {id = Int64.to_int id; command})
-  <$> BE.any_int64 <*> command_parser
+  let request =
+    (fun id command -> {id = Int64.to_int id; command})
+    <$> BE.any_int64 <*> command
 
-let result_parser =
-  any_uint8
-  >>= function
-  | 0 ->
-      any_uint8
-      >>= (function
-            | 0 -> return Nil
-            | 1 -> U.long_string_parser >>| fun s -> One s
-            | n -> fail @@ "Unknown value tag: " ^ string_of_int n)
-      >>| fun value -> Ok value
-  | 1 -> U.short_string_parser >>| fun error -> Error (ResponseError error)
-  | n -> fail @@ "Unknown result tag: " ^ string_of_int n
+  let result =
+    any_uint8
+    >>= function
+    | 0 ->
+        any_uint8
+        >>= (function
+              | 0 -> return Nil
+              | 1 -> U.Parser.long_string >>| fun s -> One s
+              | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
+        >>| fun value -> Ok value
+    | 1 -> U.Parser.short_string >>| fun error -> Error (ResponseError error)
+    | n -> failwith @@ "Unknown result tag: " ^ string_of_int n
 
-let response_parser =
-  (fun id result -> {id = Int64.to_int id; result})
-  <$> BE.any_int64 <*> result_parser
+  let response =
+    (fun id result -> {id = Int64.to_int id; result})
+    <$> BE.any_int64 <*> result
+end
 
 let read parser input_channel handler =
   try%lwt Angstrom_lwt_unix.parse_many parser handler input_channel >|= ignore
   with Unix.Unix_error (Unix.ECONNRESET, "read", "") -> Lwt.return_unit
 
-let read_request = read request_parser
+let read_request = read Parser.request
 
-let read_response = read response_parser
+let read_response = read Parser.response

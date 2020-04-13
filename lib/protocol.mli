@@ -5,6 +5,7 @@ type command =
   | Get of {key : string}
   | Delete of {key : string}
   | Flush
+  | Compact
 
 type request =
   { id : int;

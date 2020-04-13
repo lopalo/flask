@@ -33,13 +33,13 @@ let write_record log (Key key) value =
 
 let record_parser =
   let open Angstrom in
-  U.short_string_parser
+  U.Parser.short_string
   >>= fun key ->
   any_uint8
   >>= (function
         | 0 -> return Nothing
-        | 1 -> U.long_string_parser >>| fun v -> Value v
-        | n -> fail @@ "Unknown value tag: " ^ string_of_int n)
+        | 1 -> U.Parser.long_string >>| fun v -> Value v
+        | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
   >>| fun value -> (Key key, value)
 
 let read_records handler input_channel =
@@ -53,10 +53,12 @@ let read_records directory reader =
   in
   FU.FileNames.bindings file_names |> List.map snd |> Lwt_list.iter_s read_file
 
-let initialize directory =
+let initialize_state directory =
   FU.open_next_output_file ~replace:false file_extension directory
   >|= fun {fd; output_channel; number; _} ->
-  ref {directory; number; fd; output_channel; fsync_task = Lwt.wait ()}
+  {directory; number; fd; output_channel; fsync_task = Lwt.wait ()}
+
+let initialize directory = initialize_state directory >|= ref
 
 let synchornize log_state =
   Lwt_io.atomic
@@ -71,6 +73,7 @@ let synchornize log_state =
   Lwt_unix.fsync log_state.fd >|= fun () -> Lwt.wakeup_later fsync_resolver ()
 
 let truncate_files directory current_number () =
+  Logs.info (fun m -> m "Remove log files up to #%i" current_number);
   FU.find_ordered_file_names file_extension directory
   >>= fun file_names ->
   let prev_file_names, _, _ = FU.FileNames.split current_number file_names in
@@ -79,10 +82,10 @@ let truncate_files directory current_number () =
 
 let advance log switch_callback =
   let dir = !log.directory in
-  initialize dir
-  >>= fun new_log ->
+  initialize_state dir
+  >>= fun new_log_state ->
+  Logs.info (fun m -> m "Advance log to #%i" new_log_state.number);
   let old_log_state = !log in
-  let new_log_state = !new_log in
   log := new_log_state;
   switch_callback ();
   synchornize old_log_state
@@ -93,8 +96,8 @@ let advance log switch_callback =
 let run_synchronizer (config : Config.t) log =
   U.run_periodically config.log_fsync_period (fun () -> synchornize !log)
 
-let files_size directory =
-  FU.find_ordered_file_names file_extension directory
+let files_size log =
+  FU.find_ordered_file_names file_extension !log.directory
   >>= fun file_names ->
   let add size file_name =
     Lwt_unix.stat file_name >|= fun {st_size; _} -> size + st_size

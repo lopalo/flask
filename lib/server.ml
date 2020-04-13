@@ -87,9 +87,12 @@ let get_value {memory_table = {storage; previous_storage; _}; read_cache; _} key
 
 let delete_value state key = set_value state key Nothing
 
-let flush {config; memory_table; persistent_table; persistent_log; _} =
-  PT.flush_memory_table config.data_directory persistent_table persistent_log
-    memory_table
+let is_pt_writing {persistent_table; _} = PT.is_writing persistent_table
+
+let flush {memory_table; persistent_table; persistent_log; _} =
+  PT.flush_memory_table persistent_table persistent_log memory_table
+
+let compact {persistent_table; _} = PT.compact_levels persistent_table
 
 let result value =
   Done
@@ -97,6 +100,10 @@ let result value =
        (match value with
        | Nothing -> P.Nil
        | Value v -> One v))
+
+let error message = Done (Error (ResponseError message))
+
+let pt_is_writing_error = error "Persistent table is writing files to disk"
 
 let handle_command state = function
   | P.Set {key; value} -> (
@@ -113,9 +120,15 @@ let handle_command state = function
     | Some p -> WaitWriteSync (p, Ok P.Nil)
     | None -> Done (Ok P.Nil))
   | Flush ->
-      Wait
-        (flush state
-        >|= fun records_amount -> Ok (P.One (string_of_int records_amount)))
+      if is_pt_writing state then pt_is_writing_error
+      else
+        Wait
+          (flush state
+          >|= fun records_amount -> Ok (P.One (string_of_int records_amount)))
+  | Compact ->
+      if is_pt_writing state then pt_is_writing_error
+      else
+        Wait (compact state >|= fun status -> Ok (P.One (Bool.to_string status)))
 
 let rec handle_request state oc ({id; command} as req : P.request) =
   (* Give up back pressure in favour of multiplexing *)
@@ -135,7 +148,10 @@ let rec handle_request state oc ({id; command} as req : P.request) =
                 let op = ref Lwt.return_unit in
                 (op :=
                    PT.pull_value state.persistent_table key
-                   >|= fun value ->
+                   >>= fun value ->
+                   (* To make sure that the callback isn't run immediately if promise is fulfilled *)
+                   Lwt.pause ()
+                   >|= fun () ->
                    match H.find_opt operations key with
                    | Some o when o == !op ->
                        H.remove operations key;
@@ -159,10 +175,10 @@ let run_read_cache_trimmer {read_cache; _} =
   U.run_periodically {milliseconds = 1000} (fun () ->
       ReadCache.trim read_cache; Lwt.return_unit)
 
-let run_flusher ({config = {data_directory; log_size_threshold; _}; _} as state)
+let run_flusher ({config = {log_size_threshold; _}; persistent_log; _} as state)
     =
   U.run_periodically {milliseconds = 1000} (fun () ->
-      PL.files_size data_directory
+      PL.files_size persistent_log
       >>= fun {bytes} ->
       if bytes > log_size_threshold.bytes then flush state >|= ignore
       else Lwt.return_unit)
