@@ -6,6 +6,12 @@ type command =
   | Delete of {key : string}
   | Flush
   | Compact
+  | Keys of
+      { start_key : string;
+        end_key : string }
+  | Count of
+      { start_key : string;
+        end_key : string }
 
 type request =
   { id : int;
@@ -13,7 +19,8 @@ type request =
 
 type value =
   | Nil
-  | One of string
+  | OneLong of string
+  | ManyShort of string list
 
 type error = ResponseError of string [@@unboxed]
 

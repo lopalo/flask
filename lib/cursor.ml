@@ -12,6 +12,10 @@ module type RecordType = sig
   val key : t -> string
 end
 
+let read_records_amount channel =
+  Lwt_io.set_position channel Int64.zero
+  >>= fun () -> Lwt_io.BE.read_int64 channel >|= Int64.to_int
+
 module Make (Record : RecordType) = struct
   type t =
     { file_name : string;
@@ -22,10 +26,7 @@ module Make (Record : RecordType) = struct
   type record = Record.t
 
   let make ~file_name channel =
-    Lwt_io.set_position channel Int64.zero
-    >>= fun () ->
-    Lwt_io.BE.read_int64 channel
-    >|= Int64.to_int
+    read_records_amount channel
     >|= fun records_amount ->
     { file_name;
       channel;

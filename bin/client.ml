@@ -12,7 +12,9 @@ let handle_response write_prefix ({id; result} : P.response) =
         ( "OK",
           match value with
           | Nil -> "nil"
-          | One s -> format "\"%s\"" s ))
+          | OneLong s -> format "\"%s\"" s
+          | ManyShort ss -> List.map (format "\"%s\"") ss |> String.concat " "
+        ))
     | Error (ResponseError err) -> ("Error", err)
   in
   let%lwt () = write_line (format "%s %s %s" number status content) in
@@ -31,6 +33,8 @@ let make_command line =
   | ["del"; key] -> Some (Delete {key})
   | ["flush"] -> Some Flush
   | ["compact"] -> Some Compact
+  | ["keys"; start_key; end_key] -> Some (Keys {start_key; end_key})
+  | ["count"; start_key; end_key] -> Some (Count {start_key; end_key})
   | _ -> None
 
 let run_client is_interactive host port =

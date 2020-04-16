@@ -3,6 +3,7 @@ open Lwt.Infix
 open Common
 module U = Util
 module FU = FileUtil
+module MT = MemoryTable
 
 type level = Lwt_io.input_channel
 
@@ -13,7 +14,6 @@ type t =
 
 type key_record =
   { key_payload : string;
-    key_offset : int64;
     (* Empty fixed-length value which contains only a tag *)
     value_type : value;
     value_offset : int64;
@@ -48,20 +48,20 @@ let value_tag = function
   | Nothing -> 0
   | Value _ -> 1
 
-let write_records channel storage =
-  let records_amount = H.length storage in
+let write_records channel values =
+  let records_amount = H.length values in
   let empty_key = Key "" in
   let keys = Array.make records_amount empty_key in
   let value_offset = ref (key_offset records_amount) in
   (let i = ref 0 in
-   H.to_seq_keys storage |> Seq.iter (fun key -> keys.(!i) <- key; incr i));
+   H.to_seq_keys values |> Seq.iter (fun key -> keys.(!i) <- key; incr i));
   Array.sort compare keys;
   Lwt_io.BE.write_int64 channel (Int64.of_int records_amount)
   >>= fun () ->
   for%lwt i = 0 to records_amount - 1 do
     let key = keys.(i) in
     let (Key key_payload) = key in
-    let value = H.find storage key in
+    let value = H.find values key in
     write_key_payload channel key_payload
     >>= fun () ->
     U.write_uint8 channel (value_tag value)
@@ -78,29 +78,24 @@ let write_records channel storage =
   done
   >>= fun () ->
   for%lwt i = 0 to records_amount - 1 do
-    match H.find storage keys.(i) with
+    match H.find values keys.(i) with
     | Nothing -> Lwt.return_unit
     | Value v -> Lwt_io.write channel v
   done
 
 let flush_memory_table persistent_table log memtable =
   Lwt_mutex.with_lock persistent_table.write_mutex (fun () ->
-      let storage = ref (H.create 0) in
-      let switch () =
-        let s = memtable.storage in
-        memtable.storage <- H.create (H.length s);
-        memtable.previous_storage <- Some s;
-        storage := s
-      in
+      let values = ref (H.create 0) in
+      let switch () = values := MT.start_flushing memtable in
       PersistentLog.advance log switch
       >>= fun truncate_log ->
-      Logs.info (fun m -> m "Start flushing of %i records" (H.length !storage));
+      Logs.info (fun m -> m "Start flushing of %i records" (H.length !values));
       FU.next_file_name file_extension persistent_table.directory
       >>= fun (file_name, _) ->
       let temp_file_name = file_name ^ "_temp" in
       FU.open_output_file ~replace:true temp_file_name
       >>= fun (fd, channel) ->
-      write_records channel !storage
+      write_records channel !values
       >>= fun () ->
       Lwt_io.flush channel
       >>= fun () ->
@@ -113,11 +108,11 @@ let flush_memory_table persistent_table log memtable =
       Lwt_io.(open_file ~mode:input file_name)
       >|= (fun input_channel ->
             persistent_table.levels <- input_channel :: persistent_table.levels;
-            memtable.previous_storage <- None)
+            MT.end_flushing memtable)
       >>= truncate_log
       >|= fun () ->
       Logs.info (fun m -> m "End flushing. Result file: %s" file_name);
-      H.length !storage)
+      H.length !values)
 
 let is_writing {write_mutex; _} = Lwt_mutex.is_locked write_mutex
 
@@ -147,42 +142,41 @@ let trim_key key = String.split_on_char null_char key |> List.hd
 let read_key_payload input_channel =
   read_exactly input_channel key_length >|= trim_key
 
-let read_key_record ?key_payload channel =
-  (match key_payload with
-  | None -> read_key_payload channel
-  | Some kp -> Lwt.return kp)
+let read_value_type input_channel =
+  read_uint8 input_channel
+  >|= function
+  | 0 -> Nothing
+  | 1 -> Value ""
+  | n -> failwith @@ "Unknown value tag: " ^ string_of_int n
+
+let read_key_record channel =
+  read_key_payload channel
   >>= fun key_payload ->
-  let key_offset = Int64.(sub (Lwt_io.position channel) (of_int key_length)) in
-  read_uint8 channel
-  >|= (function
-        | 0 -> Nothing
-        | 1 -> Value ""
-        | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
+  read_value_type channel
   >>= fun value_type ->
   Lwt_io.BE.read_int64 channel
   >>= fun value_offset ->
   Lwt_io.BE.read_int32 channel
   >>= fun value_size ->
-  Lwt.return {key_payload; value_type; key_offset; value_offset; value_size}
+  Lwt.return {key_payload; value_type; value_offset; value_size}
 
-let rec search_key_record key min_index max_index channel =
+let rec search_key_offset key min_index max_index channel =
   let index = (min_index + max_index) / 2 in
   let key_offset = key_offset index in
   Lwt_io.set_position channel key_offset
   >>= fun () ->
   read_key_payload channel
   >>= fun current_key ->
-  if key = current_key then
-    read_key_record ~key_payload:current_key channel >|= Option.some
-  else if min_index = max_index then Lwt.return_none
+  if key = current_key then Lwt.return_ok key_offset
+  else if min_index = max_index then Lwt.return_error key_offset
   else
     let min_index, max_index =
       if key < current_key then (min_index, pred index)
       else (succ index, max_index)
     in
     if min_index <= max_index then
-      search_key_record key min_index max_index channel
-    else Lwt.return_none
+      search_key_offset key min_index max_index channel
+    else Lwt.return_error key_offset
 
 let read_value input_channel {value_type; value_offset; value_size; _} =
   match value_type with
@@ -193,17 +187,18 @@ let read_value input_channel {value_type; value_offset; value_size; _} =
       read_exactly input_channel (Int32.to_int value_size) >|= fun v -> Value v
 
 let pull_value_from_level (Key key) channel =
-  Lwt_io.set_position channel Int64.zero
-  >>= fun () ->
-  Lwt_io.BE.read_int64 channel
-  >|= Int64.to_int
+  Cursor.read_records_amount channel
   >>= function
   | 0 -> Lwt.return None
   | records_amount -> (
       let min_index, max_index = (0, records_amount - 1) in
-      match%lwt search_key_record key min_index max_index channel with
-      | Some key_rec -> read_value channel key_rec >|= fun v -> Some v
-      | None -> Lwt.return_none)
+      match%lwt search_key_offset key min_index max_index channel with
+      | Ok key_offset ->
+          Lwt_io.set_position channel key_offset
+          >>= fun () ->
+          read_key_record channel
+          >>= fun key_rec -> read_value channel key_rec >|= fun v -> Some v
+      | Error _ -> Lwt.return_none)
 
 let rec pull_value_from_levels key = function
   | [] -> Lwt.return Nothing
@@ -213,11 +208,77 @@ let rec pull_value_from_levels key = function
       | Some v -> Lwt.return v
       | None -> pull_value_from_levels key levels)
 
-let rec pull_value persistent_level key =
+let rec pull_value persistent_table key =
   try%lwt
-    pull_value_from_levels key persistent_level.levels
-    (* In this case "persistent_level.levels" field was updated with new files *)
-  with Lwt_io.Channel_closed _ -> pull_value persistent_level key
+    let levels = persistent_table.levels in
+    let%lwt result = pull_value_from_levels key levels in
+    (* Check if "persistent_table.levels" has been changed *)
+    if levels == persistent_table.levels then Lwt.return result
+    else pull_value persistent_table key
+  with Lwt_io.Channel_closed _ -> pull_value persistent_table key
+
+let search_key_range_in_level (Key start_key) (Key end_key) channel =
+  Cursor.read_records_amount channel
+  >>= function
+  | 0 -> Lwt.return (Keys.empty, Keys.empty)
+  | records_amount -> (
+      let min_index, max_index = (0, records_amount - 1) in
+      match%lwt search_key_offset start_key min_index max_index channel with
+      | Ok start_offset
+      | Error start_offset ->
+          let end_offset = key_offset records_amount in
+          let open Int64 in
+          let value_offset_length = of_int value_offset_length in
+          let value_size_length = of_int value_size_length in
+          let rec loop ~keys ~deleted_keys =
+            let return () =
+              Lwt.return (Keys.of_list keys, Keys.of_list deleted_keys)
+            in
+            if Lwt_io.position channel < end_offset then
+              read_key_payload channel
+              >>= fun key ->
+              if key < end_key then
+                read_value_type channel
+                >>= fun value_type ->
+                let k = Key key in
+                let keys, deleted_keys =
+                  if key < start_key then (keys, deleted_keys)
+                  else
+                    match value_type with
+                    | Nothing -> (keys, k :: deleted_keys)
+                    | Value _ -> (k :: keys, deleted_keys)
+                in
+                Lwt_io.set_position channel
+                  (Lwt_io.position channel |> add value_offset_length
+                 |> add value_size_length)
+                >>= fun () -> loop ~keys ~deleted_keys
+              else return ()
+            else return ()
+          in
+          Lwt_io.set_position channel start_offset
+          >>= fun () -> loop ~keys:[] ~deleted_keys:[])
+
+let rec search_key_range_in_levels start_key end_key result = function
+  | [] -> Lwt.return result
+  | level :: levels ->
+      Lwt_io.atomic (search_key_range_in_level start_key end_key) level
+      >>= fun (keys, deleted_keys) ->
+      let result = Keys.diff result deleted_keys |> Keys.union keys in
+      search_key_range_in_levels start_key end_key result levels
+
+let rec search_key_range persistent_table memtable start_key end_key =
+  try%lwt
+    (* From the oldest to the newest *)
+    let levels = persistent_table.levels in
+    let%lwt result =
+      search_key_range_in_levels start_key end_key Keys.empty (List.rev levels)
+    in
+    (* Check if "persistent_table.levels" has been changed *)
+    if levels == persistent_table.levels then
+      MT.search_key_range memtable start_key end_key result |> Lwt.return
+    else search_key_range persistent_table memtable start_key end_key
+  with Lwt_io.Channel_closed _ ->
+    search_key_range persistent_table memtable start_key end_key
 
 module KeyRecord = struct
   type t = key_record
@@ -226,7 +287,7 @@ module KeyRecord = struct
 
   let end_offset = key_offset
 
-  let read_record = read_key_record ?key_payload:None
+  let read_record = read_key_record
 
   let key {key_payload; _} = key_payload
 end

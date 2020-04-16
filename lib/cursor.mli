@@ -37,3 +37,5 @@ module type S = sig
 end
 
 module Make (Record : RecordType) : S with type record = Record.t
+
+val read_records_amount : Lwt_io.input_channel -> int Lwt.t

@@ -6,16 +6,25 @@ type bytes = {bytes : int} [@@unboxed]
 
 type key = Key of string [@@unboxed]
 
+module Key = struct
+  type t = key
+
+  let equal = ( = )
+
+  let compare = compare
+
+  let hash = Hashtbl.hash
+end
+
+module Keys = Set.Make (Key)
+
+type keys = Keys.t
+
 type value =
   | Nothing
   | Value of string
 
-type storage = (key, value) Hashtbl.t
-
-type memory_table =
-  { mutable storage : storage;
-    (* Must be read-only *)
-    mutable previous_storage : storage option }
+type values = (key, value) Hashtbl.t
 
 let max_key_length = 255
 
@@ -30,14 +39,6 @@ let is_valid_value_length = function
 let max_value_weight = 100
 
 let value_weight_fraction = max_value_length / max_value_weight
-
-module Key = struct
-  type t = key
-
-  let equal = ( = )
-
-  let hash = Hashtbl.hash
-end
 
 module Value = struct
   type t = value

@@ -8,6 +8,12 @@ type command =
   | Delete of {key : string}
   | Flush
   | Compact
+  | Keys of
+      { start_key : string;
+        end_key : string }
+  | Count of
+      { start_key : string;
+        end_key : string }
 
 type request =
   { id : int;
@@ -15,10 +21,8 @@ type request =
 
 type value =
   | Nil
-  | One of string
-
-(* TODO: *)
-(* | Many of string list *)
+  | OneLong of string
+  | ManyShort of string list
 
 type error = ResponseError of string [@@unboxed]
 
@@ -39,7 +43,9 @@ let write_request oc {id; command} =
     | Get _ -> 1
     | Delete _ -> 2
     | Flush -> 3
-    | Compact -> 4)
+    | Compact -> 4
+    | Keys _ -> 5
+    | Count _ -> 6)
   >>= fun () ->
   match command with
   | Set {key; value} ->
@@ -48,6 +54,12 @@ let write_request oc {id; command} =
   | Delete {key} -> U.write_short_string oc key
   | Flush -> Lwt.return_unit
   | Compact -> Lwt.return_unit
+  | Keys {start_key; end_key} ->
+      U.write_short_string oc start_key
+      >>= fun () -> U.write_short_string oc end_key
+  | Count {start_key; end_key} ->
+      U.write_short_string oc start_key
+      >>= fun () -> U.write_short_string oc end_key
 
 let write_response oc {id; result} =
   Lwt_io.BE.write_int64 oc @@ Int64.of_int id
@@ -59,11 +71,13 @@ let write_response oc {id; result} =
       U.write_uint8 oc
         (match result with
         | Nil -> 0
-        | One _ -> 1)
+        | OneLong _ -> 1
+        | ManyShort _ -> 2)
       >>= fun () ->
       match result with
       | Nil -> Lwt.return_unit
-      | One s -> U.write_long_string oc s)
+      | OneLong s -> U.write_long_string oc s
+      | ManyShort ss -> U.write_many_short_strings oc ss)
   | Error (ResponseError error) ->
       U.write_uint8 oc 1 >>= fun () -> U.write_short_string oc error
 
@@ -87,6 +101,12 @@ module Parser = struct
     | 2 -> U.Parser.short_string >>| fun key -> Delete {key}
     | 3 -> return Flush
     | 4 -> return Compact
+    | 5 ->
+        (fun start_key end_key -> Keys {start_key; end_key})
+        <$> U.Parser.short_string <*> U.Parser.short_string
+    | 6 ->
+        (fun start_key end_key -> Count {start_key; end_key})
+        <$> U.Parser.short_string <*> U.Parser.short_string
     | n -> failwith @@ "Unknown command tag: " ^ string_of_int n
 
   let request =
@@ -100,7 +120,8 @@ module Parser = struct
         any_uint8
         >>= (function
               | 0 -> return Nil
-              | 1 -> U.Parser.long_string >>| fun s -> One s
+              | 1 -> U.Parser.long_string >>| fun s -> OneLong s
+              | 2 -> U.Parser.many_short_strings >>| fun ss -> ManyShort ss
               | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
         >>| fun value -> Ok value
     | 1 -> U.Parser.short_string >>| fun error -> Error (ResponseError error)
