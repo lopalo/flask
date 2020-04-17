@@ -8,7 +8,9 @@ type t =
     data_directory : string;
     log_fsync_period : milliseconds;
     log_size_threshold : bytes;
-    read_cache_capacity : int }
+    read_cache_capacity : int;
+    max_command_attempts : int;
+    max_concurrent_requests_per_connection : int }
 
 let read () =
   let open Arg in
@@ -21,6 +23,8 @@ let read () =
   let log_fsync_period_ms = ref 100 in
   let log_size_threshold_mb = ref 10 in
   let read_cache_capacity = ref 1000 in
+  let max_command_attempts = ref 10 in
+  let max_concurrent_requests_per_connection = ref 10 in
   let log_level_spec str =
     match Logs.level_of_string str with
     | Ok level -> log_level := level
@@ -41,4 +45,7 @@ let read () =
     data_directory = !data_directory;
     log_fsync_period = {milliseconds = !log_fsync_period_ms};
     log_size_threshold = U.bytes !log_size_threshold_mb;
-    read_cache_capacity = !read_cache_capacity }
+    read_cache_capacity = !read_cache_capacity;
+    max_command_attempts = !max_command_attempts;
+    max_concurrent_requests_per_connection =
+      !max_concurrent_requests_per_connection }

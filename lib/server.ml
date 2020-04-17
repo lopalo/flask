@@ -33,7 +33,8 @@ let initialize_state (config : Config.t) =
       ignore @@ MT.set_value memory_table key value;
       Lwt.return_unit)
   >>= fun () ->
-  Logs.info (fun m -> m "%i records restored from log" (MT.size memory_table));
+  Logs.info (fun m ->
+      m "%i records have been restored from log" (MT.size memory_table));
   PL.initialize data_dir
   >>= fun persistent_log ->
   PT.initialize data_dir
@@ -183,25 +184,39 @@ let handle_command state = function
           (search_key_range state (Key start_key) (Key end_key)
           >|= fun keys -> Ok (P.OneLong (Keys.cardinal keys |> string_of_int)))
 
-let rec handle_request state oc ({id; command} as req : P.request) =
-  (* Give up back pressure in favour of multiplexing *)
-  Lwt.async (fun () ->
-      match handle_command state command with
-      | Done result -> P.write_response_message oc {id; result}
-      | WaitWriteSync (write_promise, result) ->
-          write_promise
-          >>= fun sync_promise ->
-          sync_promise >>= fun () -> P.write_response_message oc {id; result}
-      | PullValues keys ->
-          List.map (pull_value state) keys
-          |> Lwt.join
-          >>= fun () -> handle_request state oc req
-      | Wait promise ->
-          promise >>= fun result -> P.write_response_message oc {id; result});
-  Lwt.return_unit
+let rec handle_request state oc attempt ({id; command} as req : P.request) =
+  if attempt < state.config.max_command_attempts then
+    match handle_command state command with
+    | Done result -> P.write_response_message oc {id; result}
+    | WaitWriteSync (write_promise, result) ->
+        write_promise
+        >>= fun sync_promise ->
+        sync_promise >>= fun () -> P.write_response_message oc {id; result}
+    | PullValues keys ->
+        List.map (pull_value state) keys
+        |> Lwt.join
+        >>= fun () -> handle_request state oc (succ attempt) req
+    | Wait promise ->
+        promise >>= fun result -> P.write_response_message oc {id; result}
+  else
+    P.write_response_message oc
+      { id;
+        result =
+          Error (ResponseError "Too many attempts to execute the command") }
 
 let connection_handler state (ic, oc) =
-  P.read_request ic (handle_request state oc)
+  let pool =
+    Lwt_pool.create state.config.max_concurrent_requests_per_connection
+      (fun () -> Lwt.return_unit)
+  in
+  let req_handler request =
+    let wait =
+      Lwt_pool.use pool (fun () -> handle_request state oc 0 request)
+    in
+    (* Put back pressure on a client if there're too many concurrent requests from it *)
+    if Lwt_pool.wait_queue_length pool > 0 then wait else Lwt.return_unit
+  in
+  P.read_request ic req_handler
 
 let run_read_cache_trimmer {read_cache; _} =
   U.run_periodically {milliseconds = 1000} (fun () ->
