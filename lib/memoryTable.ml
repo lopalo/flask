@@ -64,6 +64,12 @@ type t =
 let create ?size () =
   {storage = Storage.create ?size (); previous_storage = None}
 
+let size {storage; previous_storage} =
+  let size = Storage.size storage in
+  match previous_storage with
+  | None -> size
+  | Some s -> size + Storage.size s
+
 let set_value {storage; _} key value =
   match Storage.get_value storage key with
   | Some value' when value' = value -> false

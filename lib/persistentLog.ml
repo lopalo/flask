@@ -14,20 +14,25 @@ type t = state ref
 
 let file_extension = "log"
 
-let write_record log (Key key) value =
+let write_records log pairs =
   let log_state = !log in
   Lwt_io.atomic
     (fun oc ->
-      U.write_short_string oc key
+      U.write_uint8 oc (List.length pairs)
       >>= fun () ->
-      U.write_uint8 oc
-        (match value with
-        | Nothing -> 0
-        | Value _ -> 1)
-      >>= fun () ->
-      (match value with
-      | Nothing -> Lwt.return_unit
-      | Value v -> U.write_long_string oc v)
+      Lwt_list.iter_s
+        (fun (Key key, value) ->
+          U.write_short_string oc key
+          >>= fun () ->
+          U.write_uint8 oc
+            (match value with
+            | Nothing -> 0
+            | Value _ -> 1)
+          >>= fun () ->
+          match value with
+          | Nothing -> Lwt.return_unit
+          | Value v -> U.write_long_string oc v)
+        pairs
       >|= fun () -> fst log_state.fsync_task)
     log_state.output_channel
 
@@ -42,14 +47,19 @@ let record_parser =
         | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
   >>| fun value -> (Key key, value)
 
-let read_records handler input_channel =
-  Angstrom_lwt_unix.parse_many record_parser handler input_channel >|= ignore
+let records_parser =
+  let open Angstrom in
+  any_uint8 >>= fun amount -> count amount record_parser
+
+let read_file_records reader input_channel =
+  let handler = Lwt_list.iter_s reader in
+  Angstrom_lwt_unix.parse_many records_parser handler input_channel >|= ignore
 
 let read_records directory reader =
   FU.find_ordered_file_names file_extension directory
   >>= fun file_names ->
   let read_file file_name =
-    Lwt_io.(with_file ~mode:input file_name (read_records reader))
+    Lwt_io.(with_file ~mode:input file_name (read_file_records reader))
   in
   FU.FileNames.bindings file_names |> List.map snd |> Lwt_list.iter_s read_file
 

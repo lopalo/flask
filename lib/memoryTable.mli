@@ -2,6 +2,8 @@ type t
 
 val create : ?size:int -> unit -> t
 
+val size : t -> int
+
 val set_value : t -> Common.key -> Common.value -> bool
 
 val get_value : t -> Common.key -> Common.value option

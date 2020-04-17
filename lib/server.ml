@@ -19,10 +19,12 @@ type state =
 type command_result =
   | Done of P.cmd_result
   | WaitWriteSync of unit Lwt.t Lwt.t * P.cmd_result
-  | PullValue of key
+  | PullValues of key list
   | Wait of P.cmd_result Lwt.t
 
 type server = {shutdown : unit Lwt.t Lazy.t}
+
+let set_values_max_amount = 255
 
 let initialize_state (config : Config.t) =
   let data_dir = config.data_directory in
@@ -31,6 +33,7 @@ let initialize_state (config : Config.t) =
       ignore @@ MT.set_value memory_table key value;
       Lwt.return_unit)
   >>= fun () ->
+  Logs.info (fun m -> m "%i records restored from log" (MT.size memory_table));
   PL.initialize data_dir
   >>= fun persistent_log ->
   PT.initialize data_dir
@@ -45,22 +48,36 @@ let initialize_state (config : Config.t) =
       pull_operations;
       read_cache }
 
-let set_value {memory_table; persistent_log; pull_operations; read_cache; _} key
-    value =
-  assert (is_valid_key_length key);
-  assert (is_valid_value_length value);
+let set_values {memory_table; persistent_log; pull_operations; read_cache; _}
+    pairs =
+  assert (List.length pairs <= set_values_max_amount);
+  List.iter
+    (fun (key, value) ->
+      assert (is_valid_key_length key);
+      assert (is_valid_value_length value))
+    pairs;
   let result =
-    if MT.set_value memory_table key value then
-      Some (PL.write_record persistent_log key value)
-    else None
+    let updated_pairs =
+      List.filter
+        (fun (key, value) -> MT.set_value memory_table key value)
+        pairs
+    in
+    match updated_pairs with
+    | [] -> None
+    | updated_pairs -> Some (PL.write_records persistent_log updated_pairs)
   in
-  ReadCache.remove key read_cache;
-  (match H.find_opt pull_operations key with
-  | Some pull_op ->
-      H.remove pull_operations key;
-      Lwt.cancel pull_op
-  | None -> ());
+  List.iter
+    (fun (key, _) ->
+      ReadCache.remove key read_cache;
+      match H.find_opt pull_operations key with
+      | Some pull_op ->
+          H.remove pull_operations key;
+          Lwt.cancel pull_op
+      | None -> ())
+    pairs;
   result
+
+let set_value state key value = set_values state [(key, value)]
 
 let get_from_cache read_cache key =
   let open ReadCache in
@@ -87,6 +104,31 @@ let search_key_range {memory_table; persistent_table; _} start_key end_key =
   assert (start_key <= end_key);
   PT.search_key_range persistent_table memory_table start_key end_key
 
+let pull_value state key =
+  let operations = state.pull_operations in
+  let operation =
+    match H.find_opt operations key with
+    | Some operation -> operation
+    | None ->
+        let op = ref Lwt.return_unit in
+        (op :=
+           PT.pull_value state.persistent_table key
+           >>= fun value ->
+           (* To make sure that the callback isn't run immediately if promise is fulfilled *)
+           Lwt.pause ()
+           >|= fun () ->
+           match H.find_opt operations key with
+           | Some o when o == !op ->
+               H.remove operations key;
+               ReadCache.add key value state.read_cache
+           | Some _
+           | None ->
+               ());
+        H.replace operations key !op;
+        !op
+  in
+  try%lwt operation with Lwt.Canceled -> Lwt.return_unit
+
 let one_result value =
   Done
     (Ok
@@ -109,7 +151,7 @@ let handle_command state = function
       let k = Key key in
       match get_value state k with
       | Some value -> one_result value
-      | None -> PullValue k)
+      | None -> PullValues [k])
   | Delete {key} -> (
     match delete_value state (Key key) with
     | Some p -> WaitWriteSync (p, Ok P.Nil)
@@ -150,30 +192,9 @@ let rec handle_request state oc ({id; command} as req : P.request) =
           write_promise
           >>= fun sync_promise ->
           sync_promise >>= fun () -> P.write_response_message oc {id; result}
-      | PullValue key ->
-          let operations = state.pull_operations in
-          let operation =
-            match H.find_opt operations key with
-            | Some operation -> operation
-            | None ->
-                let op = ref Lwt.return_unit in
-                (op :=
-                   PT.pull_value state.persistent_table key
-                   >>= fun value ->
-                   (* To make sure that the callback isn't run immediately if promise is fulfilled *)
-                   Lwt.pause ()
-                   >|= fun () ->
-                   match H.find_opt operations key with
-                   | Some o when o == !op ->
-                       H.remove operations key;
-                       ReadCache.add key value state.read_cache
-                   | Some _
-                   | None ->
-                       ());
-                H.replace operations key !op;
-                !op
-          in
-          (try%lwt operation with Lwt.Canceled -> Lwt.return_unit)
+      | PullValues keys ->
+          List.map (pull_value state) keys
+          |> Lwt.join
           >>= fun () -> handle_request state oc req
       | Wait promise ->
           promise >>= fun result -> P.write_response_message oc {id; result});
