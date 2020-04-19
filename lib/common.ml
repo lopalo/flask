@@ -4,6 +4,8 @@ type seconds = {seconds : float} [@@unboxed]
 
 type bytes = {bytes : int} [@@unboxed]
 
+type megabytes = {megabytes : int} [@@unboxed]
+
 type key = Key of string [@@unboxed]
 
 module Key = struct

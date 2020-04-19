@@ -224,10 +224,11 @@ let run_read_cache_trimmer {read_cache; _} =
 
 let run_flusher ({config = {log_size_threshold; _}; persistent_log; _} as state)
     =
+  let threshold = U.bytes log_size_threshold in
   U.run_periodically {milliseconds = 1000} (fun () ->
       PL.files_size persistent_log
       >>= fun {bytes} ->
-      if bytes > log_size_threshold.bytes then flush state >|= ignore
+      if bytes > threshold.bytes then flush state >|= ignore
       else Lwt.return_unit)
 
 let run_server config =
