@@ -14,7 +14,8 @@ type state =
     persistent_log : PL.t;
     persistent_table : PT.t;
     pull_operations : (key, unit Lwt.t) H.t;
-    read_cache : ReadCache.t }
+    read_cache : ReadCache.t;
+    pending_requests : int ref }
 
 type command_result =
   | Done of P.cmd_result
@@ -41,13 +42,15 @@ let initialize_state (config : Config.t) =
   >>= fun persistent_table ->
   let pull_operations = H.create 256 in
   let read_cache = ReadCache.create config.read_cache_capacity in
+  let pending_requests = ref 0 in
   Lwt.return
     { config;
       memory_table;
       persistent_log;
       persistent_table;
       pull_operations;
-      read_cache }
+      read_cache;
+      pending_requests }
 
 let set_values {memory_table; persistent_log; pull_operations; read_cache; _}
     pairs =
@@ -92,8 +95,6 @@ let get_value {memory_table; read_cache; _} key =
   | Some _ as v -> v
   | None -> get_from_cache read_cache key
 
-let delete_value state key = set_value state key Nothing
-
 let is_pt_writing {persistent_table; _} = PT.is_writing persistent_table
 
 let flush {memory_table; persistent_table; persistent_log; _} =
@@ -137,26 +138,63 @@ let one_result value =
        | Nothing -> P.Nil
        | Value v -> OneLong v))
 
+let bool_value value = Ok (P.OneLong (Bool.to_string value))
+
 let error message = Done (Error (ResponseError message))
 
 let pt_is_writing_error = error "Persistent table is writing files to disk"
 
 let key_range_error = error "Start key is greater than end key"
 
+let do_set_value state key value =
+  match set_value state (Key key) (Value value) with
+  | Some p -> WaitWriteSync (p, bool_value true)
+  | None -> Done (bool_value false)
+
+let get_stats
+    { memory_table;
+      persistent_log;
+      persistent_table;
+      pull_operations;
+      read_cache;
+      pending_requests;
+      _ } =
+  let istr = string_of_int in
+  let fstr f = Printf.sprintf "%f" f in
+  PL.files_size persistent_log
+  >|= (fun log_bytes ->
+        ["log-size-mb"; (U.megabytes log_bytes).megabytes |> fstr])
+  >|= fun log_size ->
+  let memtable_size = ["memory-table-size"; MT.size memory_table |> istr] in
+  let pt_levels =
+    ["persistent-table-levels"; PT.levels_amount persistent_table |> istr]
+  in
+  let pull_operations = ["pull-operations"; H.length pull_operations |> istr] in
+  let read_cache_size =
+    ["read-cache-size"; ReadCache.size read_cache |> istr]
+  in
+  let pending_requests = ["pending-requests"; !pending_requests |> istr] in
+  let stats =
+    [ memtable_size;
+      log_size;
+      pt_levels;
+      pending_requests;
+      pull_operations;
+      read_cache_size ]
+  in
+  List.concat stats
+
 let handle_command state = function
-  | P.Set {key; value} -> (
-    match set_value state (Key key) (Value value) with
-    | Some p -> WaitWriteSync (p, Ok P.Nil)
-    | None -> one_result Nothing)
+  | P.Set {key; value} -> do_set_value state key value
   | Get {key} -> (
       let k = Key key in
       match get_value state k with
       | Some value -> one_result value
       | None -> PullValues [k])
   | Delete {key} -> (
-    match delete_value state (Key key) with
-    | Some p -> WaitWriteSync (p, Ok P.Nil)
-    | None -> Done (Ok P.Nil))
+    match set_value state (Key key) Nothing with
+    | Some p -> WaitWriteSync (p, bool_value true)
+    | None -> Done (bool_value false))
   | Flush ->
       if is_pt_writing state then pt_is_writing_error
       else
@@ -166,10 +204,7 @@ let handle_command state = function
           Ok (P.OneLong (string_of_int records_amount)))
   | Compact ->
       if is_pt_writing state then pt_is_writing_error
-      else
-        Wait
-          (compact state
-          >|= fun status -> Ok (P.OneLong (Bool.to_string status)))
+      else Wait (compact state >|= fun status -> bool_value status)
   | Keys {start_key; end_key} ->
       if start_key > end_key then key_range_error
       else
@@ -183,6 +218,104 @@ let handle_command state = function
         Wait
           (search_key_range state (Key start_key) (Key end_key)
           >|= fun keys -> Ok (P.OneLong (Keys.cardinal keys |> string_of_int)))
+  | Add {key; value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some (Value _) -> Done (bool_value false)
+      | Some Nothing -> do_set_value state key value)
+  | Replace {key; value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some Nothing -> Done (bool_value false)
+      | Some (Value _) -> do_set_value state key value)
+  | CAS {key; old_value; new_value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some (Value current_value) when current_value <> old_value ->
+          Done (bool_value false)
+      | Some (Value _)
+      | Some Nothing ->
+          do_set_value state key new_value)
+  | Swap {key1; key2} -> (
+      let k1, k2 = (Key key1, Key key2) in
+      match (get_value state k1, get_value state k2) with
+      | None, None -> PullValues [k1; k2]
+      | None, Some _ -> PullValues [k1]
+      | Some _, None -> PullValues [k2]
+      | Some v1, Some v2 -> (
+        match set_values state [(k1, v2); (k2, v1)] with
+        | Some p -> WaitWriteSync (p, bool_value true)
+        | None -> Done (bool_value false)))
+  | Append {key; value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some v ->
+          let new_value =
+            match v with
+            | Nothing -> value
+            | Value value' -> value' ^ value
+          in
+          do_set_value state key new_value)
+  | Prepend {key; value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some v ->
+          let new_value =
+            match v with
+            | Nothing -> value
+            | Value value' -> value ^ value'
+          in
+          do_set_value state key new_value)
+  | Incr {key; value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some v -> (
+        match v with
+        | Nothing -> do_set_value state key (string_of_int value)
+        | Value value' -> (
+          match int_of_string_opt value' with
+          | None -> error "Current value is not an integer"
+          | Some i -> do_set_value state key (string_of_int (i + value)))))
+  | Decr {key; value} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some v -> (
+        match v with
+        | Nothing -> do_set_value state key (string_of_int (-value))
+        | Value value' -> (
+          match int_of_string_opt value' with
+          | None -> error "Current value is not an integer"
+          | Some i -> do_set_value state key (string_of_int (i - value)))))
+  | GetLength {key} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some value ->
+          one_result
+            (Value
+               (match value with
+               | Nothing -> "0"
+               | Value v -> String.length v |> string_of_int)))
+  | GetRange {key; start; length} -> (
+      let k = Key key in
+      match get_value state k with
+      | None -> PullValues [k]
+      | Some value -> (
+        try
+          one_result
+            (Value
+               (match value with
+               | Nothing -> ""
+               | Value v -> String.sub v start length))
+        with Invalid_argument _ -> error "Invalid range"))
+  | GetStats -> Wait (get_stats state >|= fun stats -> Ok (P.ManyShort stats))
 
 let rec handle_request state oc attempt ({id; command} as req : P.request) =
   if attempt < state.config.max_command_attempts then
@@ -210,8 +343,10 @@ let connection_handler state (ic, oc) =
       (fun () -> Lwt.return_unit)
   in
   let req_handler request =
+    incr state.pending_requests;
     let wait =
-      Lwt_pool.use pool (fun () -> handle_request state oc 0 request)
+      (Lwt_pool.use pool (fun () -> handle_request state oc 0 request))
+        [%lwt.finally Lwt.return (decr state.pending_requests)]
     in
     (* Put back pressure on a client if there're too many concurrent requests from it *)
     if Lwt_pool.wait_queue_length pool > 0 then wait else Lwt.return_unit

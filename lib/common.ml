@@ -4,7 +4,7 @@ type seconds = {seconds : float} [@@unboxed]
 
 type bytes = {bytes : int} [@@unboxed]
 
-type megabytes = {megabytes : int} [@@unboxed]
+type megabytes = {megabytes : float} [@@unboxed]
 
 type key = Key of string [@@unboxed]
 

@@ -4,7 +4,9 @@ let rec forever () = Lwt.bind (Lwt_unix.sleep 60.) (fun _ -> forever ())
 
 let seconds {milliseconds} = {seconds = Float.of_int milliseconds /. 1000.0}
 
-let bytes {megabytes} = {bytes = megabytes * 1024 * 1024}
+let bytes {megabytes} = {bytes = int_of_float @@ (megabytes *. 1024.0 *. 1024.0)}
+
+let megabytes {bytes} = {megabytes = Float.of_int bytes /. 1024.0 /. 1024.0}
 
 open Lwt.Infix
 

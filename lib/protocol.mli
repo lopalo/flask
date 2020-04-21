@@ -12,6 +12,37 @@ type command =
   | Count of
       { start_key : string;
         end_key : string }
+  | Add of
+      { key : string;
+        value : string }
+  | Replace of
+      { key : string;
+        value : string }
+  | CAS of
+      { key : string;
+        old_value : string;
+        new_value : string }
+  | Swap of
+      { key1 : string;
+        key2 : string }
+  | Append of
+      { key : string;
+        value : string }
+  | Prepend of
+      { key : string;
+        value : string }
+  | Incr of
+      { key : string;
+        value : int }
+  | Decr of
+      { key : string;
+        value : int }
+  | GetLength of {key : string}
+  | GetRange of
+      { key : string;
+        start : int;
+        length : int }
+  | GetStats
 
 type request =
   { id : int;

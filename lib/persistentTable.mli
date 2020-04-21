@@ -4,6 +4,8 @@ val initialize : string -> t Lwt.t
 
 val is_writing : t -> bool
 
+val levels_amount : t -> int
+
 val flush_memory_table : t -> PersistentLog.t -> MemoryTable.t -> int Lwt.t
 
 val pull_value : t -> Common.key -> Common.value Lwt.t

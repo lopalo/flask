@@ -35,6 +35,27 @@ let make_command line =
   | ["compact"] -> Some Compact
   | ["keys"; start_key; end_key] -> Some (Keys {start_key; end_key})
   | ["count"; start_key; end_key] -> Some (Count {start_key; end_key})
+  | ["add"; key; value] -> Some (Add {key; value})
+  | ["replace"; key; value] -> Some (Replace {key; value})
+  | ["cas"; key; old_value; new_value] -> Some (CAS {key; old_value; new_value})
+  | ["swap"; key1; key2] -> Some (Swap {key1; key2})
+  | ["append"; key; value] -> Some (Append {key; value})
+  | ["prepend"; key; value] -> Some (Prepend {key; value})
+  | ["incr"; key; value] -> (
+    match int_of_string_opt value with
+    | Some value when value >= 0 -> Some (Incr {key; value})
+    | _ -> None)
+  | ["decr"; key; value] -> (
+    match int_of_string_opt value with
+    | Some value when value >= 0 -> Some (Decr {key; value})
+    | _ -> None)
+  | ["get-length"; key] -> Some (GetLength {key})
+  | ["get-range"; key; start; length] -> (
+    match (int_of_string_opt start, int_of_string_opt length) with
+    | Some start, Some length when start >= 0 && length >= 0 ->
+        Some (GetRange {key; start; length})
+    | _ -> None)
+  | ["get-stats"] -> Some GetStats
   | _ -> None
 
 let run_client is_interactive host port =

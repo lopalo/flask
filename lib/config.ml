@@ -18,7 +18,7 @@ let default =
     port = 14777;
     data_directory = "./data/";
     log_fsync_period = {milliseconds = 100};
-    log_size_threshold = {megabytes = 10};
+    log_size_threshold = {megabytes = 10.0};
     read_cache_capacity = 1000;
     max_command_attempts = 10;
     max_concurrent_requests_per_connection = 10 }
@@ -48,6 +48,11 @@ let parse_config_file =
         | Some i -> i
         | None -> error "expected an integer"
       in
+      let parse_float () =
+        match float_of_string_opt value with
+        | Some i -> i
+        | None -> error "expected a float"
+      in
       match parameter with
       | "log-level" -> (
         match Logs.level_of_string value with
@@ -59,7 +64,7 @@ let parse_config_file =
       | "log-fsync-period-ms" ->
           {config with log_fsync_period = {milliseconds = parse_int ()}}
       | "log-size-threshold-mb" ->
-          {config with log_size_threshold = {megabytes = parse_int ()}}
+          {config with log_size_threshold = {megabytes = parse_float ()}}
       | "read-cache-capacity" -> {config with read_cache_capacity = parse_int ()}
       | "max-command-attempts" ->
           {config with max_command_attempts = parse_int ()}

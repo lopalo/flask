@@ -116,6 +116,8 @@ let flush_memory_table persistent_table log memtable =
 
 let is_writing {write_mutex; _} = Lwt_mutex.is_locked write_mutex
 
+let levels_amount {levels; _} = List.length levels
+
 let open_level_files directory =
   (* From the newest to the oldest *)
   FU.find_ordered_file_names file_extension directory
