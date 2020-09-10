@@ -1,4 +1,4 @@
-module type RecordType = sig
+module type Record = sig
   type t
 
   val records_amount_length : int
@@ -36,6 +36,6 @@ module type S = sig
   val close : t -> unit Lwt.t
 end
 
-module Make (Record : RecordType) : S with type record = Record.t
+module Make (Record : Record) : S with type record := Record.t
 
 val read_records_amount : Lwt_io.input_channel -> int Lwt.t

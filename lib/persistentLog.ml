@@ -70,7 +70,7 @@ let initialize_state directory =
 
 let initialize directory = initialize_state directory >|= ref
 
-let synchronize log_state =
+let fsync log_state =
   Lwt_io.atomic
     (fun oc ->
       Lwt_io.flush oc
@@ -94,17 +94,16 @@ let advance log switch_callback =
   let dir = !log.directory in
   initialize_state dir
   >>= fun new_log_state ->
-  Logs.info (fun m -> m "Advance log to #%i" new_log_state.number);
+  Logs.info (fun m -> m "Advance log to #%i segment" new_log_state.number);
   let old_log_state = !log in
   log := new_log_state;
   switch_callback ();
-  synchronize old_log_state
+  fsync old_log_state
   >>= fun () ->
   Lwt_io.close old_log_state.output_channel
   >|= fun () -> truncate_files dir new_log_state.number
 
-let run_synchronizer (config : Config.t) log =
-  U.run_periodically config.log_fsync_period (fun () -> synchronize !log)
+let synchronize {contents = log} = fsync log
 
 let files_size log =
   FU.find_ordered_file_names file_extension !log.directory

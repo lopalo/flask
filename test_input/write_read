@@ -1,11 +1,20 @@
-SET xxx aaaaaaaaaaaa
-SET yyy bbbbbb
-SET zzz cccccccccccccc
+SET foo aaa
+SET bar bbbbbb
+SET baz ccccccccc
+SET foo AAA
 
-GET yyy
-GET NNN
-GET xxx
-GET zzz
+GET bar
+GET no-key
+GET foo
+GET baz
 
-DEL zzz
-GET zzz
+DEL baz
+GET baz
+DEL bar
+GET baz
+
+SET baz X
+
+GET baz
+GET bar
+GET foo

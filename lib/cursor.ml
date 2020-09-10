@@ -1,6 +1,6 @@
 open Lwt.Infix
 
-module type RecordType = sig
+module type Record = sig
   type t
 
   val records_amount_length : int
@@ -16,14 +16,12 @@ let read_records_amount channel =
   Lwt_io.set_position channel Int64.zero
   >>= fun () -> Lwt_io.BE.read_int64 channel >|= Int64.to_int
 
-module Make (Record : RecordType) = struct
+module Make (Record : Record) = struct
   type t =
     { file_name : string;
       channel : Lwt_io.input_channel;
       end_offset : int64;
       mutable current_record : Record.t option }
-
-  type record = Record.t
 
   let make ~file_name channel =
     read_records_amount channel
