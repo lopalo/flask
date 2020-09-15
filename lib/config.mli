@@ -10,3 +10,5 @@ type t =
     max_concurrent_requests_per_connection : int }
 
 val read : unit -> t
+
+val default : t

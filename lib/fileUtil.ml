@@ -47,3 +47,12 @@ let open_next_output_file ~replace file_extension directory =
   open_output_file ~replace file_name
   >>= fun (fd, output_channel) ->
   Lwt.return {fd; output_channel; number; file_name}
+
+let rec remove_dir path =
+  let open Sys in
+  if file_exists path then
+    if is_directory path then (
+      readdir path
+      |> Array.iter (fun name -> remove_dir (Filename.concat path name));
+      Unix.rmdir path)
+    else Sys.remove path

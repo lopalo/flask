@@ -3,7 +3,7 @@ module State = ServerState
 open Lwt.Infix
 open Common
 
-type server = {shutdown : unit Lwt.t Lazy.t}
+type t = {shutdown : unit Lwt.t Lazy.t}
 
 let rec handle_request state oc attempt ({id; command} as req : Proto.request) =
   if attempt < (State.config state).max_command_attempts then

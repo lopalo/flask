@@ -1,0 +1,11 @@
+(executable
+ (name test)
+ (libraries alcotest-lwt flask)
+ (preprocess
+  (pps lwt_ppx)))
+
+(alias
+ (name runtest)
+ (deps test.exe)
+ (action
+  (run %{deps} --color=always)))
