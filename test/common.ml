@@ -98,7 +98,8 @@ let wait_response client ?(timeout = 1.5) request_id =
     match res with
     | Some r -> Lwt.return r
     | None ->
-        if Unix.gettimeofday () -. start_ts > timeout then failwith "timeout"
+        if Unix.gettimeofday () -. start_ts > timeout then
+          Lwt.fail_with "timeout"
         else
           let%lwt _ = Lwt_unix.sleep 0.001 in
           f ()
@@ -121,12 +122,14 @@ let one value = Ok (P.OneLong value)
 
 let many values = Ok (P.ManyShort values)
 
+let error message = Error (P.ResponseError message)
+
 let resp id result = {P.id; result}
 
 let value_pp ppf = function
   | P.Nil -> Fmt.string ppf "Nil"
   | OneLong v -> Fmt.string ppf v
-  | ManyShort vs -> Fmt.(list string) ppf vs
+  | ManyShort vs -> Fmt.(Dump.list string) ppf vs
 
 let error_pp ppf (P.ResponseError err) = Fmt.string ppf err
 

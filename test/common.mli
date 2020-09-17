@@ -45,6 +45,8 @@ val one : string -> Protocol.cmd_result
 
 val many : string list -> Protocol.cmd_result
 
+val error : string -> Protocol.cmd_result
+
 val resp : int -> Protocol.cmd_result -> Protocol.response
 
 val cmd_result : Protocol.cmd_result Alcotest.testable
