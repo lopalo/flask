@@ -19,7 +19,7 @@ let recovery_from_log session () =
   in
   A.(check bool) "connection is refused" true connection_refused;
   let%lwt () = start_server session in
-  let%lwt () = Lwt_unix.sleep 0.01 in
+  let%lwt () = Lwt_unix.sleep 0.02 in
   let%lwt cli = create_client session in
   let%lwt result = request cli (set "d" "ddd") in
   A.(check cmd_result) "set d" (one "true") result;
@@ -29,13 +29,13 @@ let recovery_from_log session () =
   A.(check cmd_result) "set c" (one "true") result;
   let%lwt () = kill_server session in
   let%lwt () = start_server session in
-  let%lwt () = Lwt_unix.sleep 0.01 in
+  let%lwt () = Lwt_unix.sleep 0.02 in
   let%lwt cli = create_client session in
   let%lwt result = request cli (set "e" "eee") in
   A.(check cmd_result) "set e" (one "true") result;
   let%lwt () = kill_server session in
   let%lwt () = start_server session in
-  let%lwt () = Lwt_unix.sleep 0.01 in
+  let%lwt () = Lwt_unix.sleep 0.02 in
   let%lwt cli = create_client session in
   let%lwt result =
     Lwt_list.map_p (fun k -> get k |> request cli) ["a"; "b"; "c"; "d"; "e"]

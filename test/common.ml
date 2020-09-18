@@ -38,8 +38,8 @@ let start_session config =
   let data_directory =
     Filename.(concat (get_temp_dir_name ()) "flask_test_C5KHXcViWkeuqKlj5U3wuQ")
   in
-  FileUtil.remove_dir data_directory;
-  Unix.mkdir data_directory 0o700;
+  let%lwt () = FileUtil.remove_dir data_directory in
+  let%lwt _ = Lwt_unix.mkdir data_directory 0o700 in
   let config = Config.{config with data_directory} in
   let s = {config; server_pid = None; clients = []} in
   let%lwt () = start_server s in

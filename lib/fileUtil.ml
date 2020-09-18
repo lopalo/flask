@@ -49,10 +49,18 @@ let open_next_output_file ~replace file_extension directory =
   Lwt.return {fd; output_channel; number; file_name}
 
 let rec remove_dir path =
-  let open Sys in
-  if file_exists path then
-    if is_directory path then (
-      readdir path
-      |> Array.iter (fun name -> remove_dir (Filename.concat path name));
-      Unix.rmdir path)
-    else Sys.remove path
+  let open Lwt_unix in
+  if%lwt file_exists path then
+    let%lwt s = stat path in
+    match s.st_kind with
+    | S_DIR ->
+        let%lwt _ =
+          files_of_directory path
+          |> Lwt_stream.iter_s (fun name ->
+                 if name.[0] <> '.' then remove_dir (Filename.concat path name)
+                 else Lwt.return_unit)
+        in
+        rmdir path
+    | S_REG -> unlink path
+    | _ -> Lwt.return_unit
+  else Lwt.return_unit
