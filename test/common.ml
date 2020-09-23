@@ -9,7 +9,8 @@ type session =
 and client =
   { output_channel : Lwt_io.output_channel;
     request_id : int ref;
-    mutable responses : P.response list }
+    mutable responses : P.response list;
+    mutable reader : unit Lwt.t }
 
 let config =
   { Config.default with
@@ -47,7 +48,8 @@ let start_session config =
 
 let terminate_session session =
   List.iter
-    (fun {output_channel; _} ->
+    (fun {output_channel; reader; _} ->
+      Lwt.cancel reader;
       Lwt_io.close output_channel |> Lwt.ignore_result)
     session.clients;
   match session.server_pid with
@@ -68,11 +70,18 @@ let create_client session =
   let%lwt addresses = Lwt_unix.getaddrinfo host (string_of_int port) [] in
   let sockaddr = (List.hd addresses).ai_addr in
   let%lwt input_channel, output_channel = Lwt_io.open_connection sockaddr in
-  let cli = {output_channel; request_id = ref 0; responses = []} in
-  Lwt.async (fun () ->
-      P.read_response input_channel (fun r ->
-          cli.responses <- r :: cli.responses;
-          Lwt.return_unit));
+  let cli =
+    { output_channel;
+      request_id = ref 0;
+      responses = [];
+      reader = Lwt.return_unit }
+  in
+  let reader =
+    P.read_response input_channel (fun r ->
+        cli.responses <- r :: cli.responses;
+        Lwt.return_unit)
+  in
+  cli.reader <- reader;
   Lwt.return cli
 
 let send_request {request_id; output_channel; _} command =

@@ -13,3 +13,11 @@
  (libraries flask)
  (preprocess
   (pps lwt_ppx)))
+
+(executable
+ (name benchmark)
+ (public_name flask-benchmark)
+ (modules benchmark)
+ (libraries flask)
+ (preprocess
+  (pps lwt_ppx)))

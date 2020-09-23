@@ -17,7 +17,7 @@ let default =
     host = "127.0.0.1";
     port = 14777;
     data_directory = "./data/";
-    log_fsync_period = {milliseconds = 100};
+    log_fsync_period = {milliseconds = 50};
     log_size_threshold = {megabytes = 10.0};
     read_cache_capacity = 1000;
     max_command_attempts = 10;

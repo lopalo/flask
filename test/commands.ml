@@ -172,9 +172,9 @@ let incr_decr session () =
   let%lwt _ = request cli (set "a" "77") in
   let%lwt _ = request cli (set "b" "yyy") in
   let%lwt result = request cli (P.Incr {key = "a"; value = 345}) in
-  A.(check cmd_result) "increment a" (one "true") result;
-  let%lwt _ = request cli (P.Decr {key = "a"; value = 10}) in
-  A.(check cmd_result) "decrement a" (one "true") result;
+  A.(check cmd_result) "increment a" (one "422") result;
+  let%lwt result = request cli (P.Decr {key = "a"; value = 10}) in
+  A.(check cmd_result) "decrement a" (one "412") result;
   let%lwt result = request cli (P.Incr {key = "b"; value = 345}) in
   A.(check cmd_result)
     "increment b"

@@ -28,6 +28,11 @@ let set_value state key value =
   | Some p -> WaitWriteSync (p, bool_value true)
   | None -> Done (bool_value false)
 
+let set_and_return_value state key value =
+  match State.set_value state (Key key) (Value value) with
+  | Some p -> WaitWriteSync (p, Ok (OneLong value))
+  | None -> Done (bool_value false)
+
 let get_value = State.get_value
 
 let handle state =
@@ -128,22 +133,24 @@ let handle state =
       | None -> PullValues [k]
       | Some v -> (
         match v with
-        | Nothing -> set_value state key (string_of_int value)
+        | Nothing -> set_and_return_value state key (string_of_int value)
         | Value value' -> (
           match int_of_string_opt value' with
           | None -> error "Current value is not an integer"
-          | Some i -> set_value state key (string_of_int (i + value)))))
+          | Some i -> set_and_return_value state key (string_of_int (i + value))
+          )))
   | Decr {key; value} -> (
       let k = Key key in
       match get_value state k with
       | None -> PullValues [k]
       | Some v -> (
         match v with
-        | Nothing -> set_value state key (string_of_int (-value))
+        | Nothing -> set_and_return_value state key (string_of_int (-value))
         | Value value' -> (
           match int_of_string_opt value' with
           | None -> error "Current value is not an integer"
-          | Some i -> set_value state key (string_of_int (i - value)))))
+          | Some i -> set_and_return_value state key (string_of_int (i - value))
+          )))
   | GetLength {key} -> (
       let k = Key key in
       match get_value state k with
