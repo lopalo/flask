@@ -15,7 +15,9 @@ and client =
 let config =
   { Config.default with
     host = "127.0.0.77";
-    log_fsync_period = {milliseconds = 1} }
+    log_fsync_period = {milliseconds = 1};
+    read_cache_capacity = 1;
+    max_concurrent_requests_per_connection = 1000 }
 
 let start_server session =
   assert (Option.is_none session.server_pid);

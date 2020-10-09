@@ -20,7 +20,7 @@ let set_values_max_amount = 255
 let initialize (config : Config.t) =
   let data_dir = config.data_directory in
   let memory_table = MT.create () in
-  PL.read_records data_dir (fun (key, value) ->
+  PL.read_record_files data_dir (fun (key, value) ->
       ignore @@ MT.set_value memory_table key value;
       Lwt.return_unit)
   >>= fun () ->

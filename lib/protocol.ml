@@ -65,21 +65,24 @@ type response =
 
 open Lwt.Infix
 
-let write_int64 oc value = Lwt_io.BE.write_int64 oc @@ Int64.of_int value
+let write_int64 channel value =
+  Lwt_io.BE.write_int64 channel @@ Int64.of_int value
 
-let write_key_value oc key value =
-  U.write_short_string oc key >>= fun () -> U.write_long_string oc value
+let write_key_value channel key value =
+  U.write_short_string channel key
+  >>= fun () -> U.write_long_string channel value
 
-let write_key_int oc key value =
-  U.write_short_string oc key >>= fun () -> write_int64 oc value
+let write_key_int channel key value =
+  U.write_short_string channel key >>= fun () -> write_int64 channel value
 
-let write_key_key oc key key' =
-  U.write_short_string oc key >>= fun () -> U.write_short_string oc key'
+let write_key_key channel key key' =
+  U.write_short_string channel key
+  >>= fun () -> U.write_short_string channel key'
 
-let write_request oc {id; command} =
-  write_int64 oc id
+let write_request channel {id; command} =
+  write_int64 channel id
   >>= fun () ->
-  U.write_uint8 oc
+  U.write_uint8 channel
     (match command with
     | Set _ -> 0
     | Get _ -> 1
@@ -101,37 +104,38 @@ let write_request oc {id; command} =
     | GetStats -> 17)
   >>= fun () ->
   match command with
-  | Set {key; value} -> write_key_value oc key value
-  | Get {key} -> U.write_short_string oc key
-  | Delete {key} -> U.write_short_string oc key
+  | Set {key; value} -> write_key_value channel key value
+  | Get {key} -> U.write_short_string channel key
+  | Delete {key} -> U.write_short_string channel key
   | Flush -> Lwt.return_unit
   | Compact -> Lwt.return_unit
-  | Keys {start_key; end_key} -> write_key_key oc start_key end_key
-  | Count {start_key; end_key} -> write_key_key oc start_key end_key
-  | Add {key; value} -> write_key_value oc key value
-  | Replace {key; value} -> write_key_value oc key value
+  | Keys {start_key; end_key} -> write_key_key channel start_key end_key
+  | Count {start_key; end_key} -> write_key_key channel start_key end_key
+  | Add {key; value} -> write_key_value channel key value
+  | Replace {key; value} -> write_key_value channel key value
   | CAS {key; old_value; new_value} ->
-      write_key_value oc key old_value
-      >>= fun () -> U.write_long_string oc new_value
-  | Swap {key1; key2} -> write_key_key oc key1 key2
-  | Append {key; value} -> write_key_value oc key value
-  | Prepend {key; value} -> write_key_value oc key value
-  | Incr {key; value} -> write_key_int oc key value
-  | Decr {key; value} -> write_key_int oc key value
-  | GetLength {key} -> U.write_short_string oc key
+      write_key_value channel key old_value
+      >>= fun () -> U.write_long_string channel new_value
+  | Swap {key1; key2} -> write_key_key channel key1 key2
+  | Append {key; value} -> write_key_value channel key value
+  | Prepend {key; value} -> write_key_value channel key value
+  | Incr {key; value} -> write_key_int channel key value
+  | Decr {key; value} -> write_key_int channel key value
+  | GetLength {key} -> U.write_short_string channel key
   | GetRange {key; start; length} ->
-      U.write_short_string oc key
-      >>= fun () -> write_int64 oc start >>= fun () -> write_int64 oc length
+      U.write_short_string channel key
+      >>= fun () ->
+      write_int64 channel start >>= fun () -> write_int64 channel length
   | GetStats -> Lwt.return_unit
 
-let write_response oc {id; result} =
-  write_int64 oc id
+let write_response channel {id; result} =
+  write_int64 channel id
   >>= fun () ->
   match result with
   | Ok result -> (
-      U.write_uint8 oc 0
+      U.write_uint8 channel 0
       >>= fun () ->
-      U.write_uint8 oc
+      U.write_uint8 channel
         (match result with
         | Nil -> 0
         | OneLong _ -> 1
@@ -139,84 +143,113 @@ let write_response oc {id; result} =
       >>= fun () ->
       match result with
       | Nil -> Lwt.return_unit
-      | OneLong s -> U.write_long_string oc s
-      | ManyShort ss -> U.write_many_short_strings oc ss)
+      | OneLong s -> U.write_long_string channel s
+      | ManyShort ss -> U.write_many_short_strings channel ss)
   | Error (ResponseError error) ->
-      U.write_uint8 oc 1 >>= fun () -> U.write_short_string oc error
+      U.write_uint8 channel 1 >>= fun () -> U.write_short_string channel error
 
-let write_message message_writer output_channel msg =
-  Lwt_io.atomic (fun oc -> message_writer oc msg) output_channel
+let write_message message_writer channel msg =
+  try%lwt Lwt_io.atomic (fun channel -> message_writer channel msg) channel with
+  | Unix.Unix_error (Unix.EPIPE, _, _)
+  | Unix.Unix_error (Unix.EBADF, _, _)
+  | Unix.Unix_error (Unix.ENOTCONN, _, _)
+  | Unix.Unix_error (Unix.ECONNREFUSED, _, _)
+  | Unix.Unix_error (Unix.ECONNRESET, _, _)
+  | Unix.Unix_error (Unix.ECONNABORTED, _, _) ->
+      Lwt.return_unit
 
 let write_request_message = write_message write_request
 
 let write_response_message = write_message write_response
 
-module Parser = struct
-  open Angstrom
+let read_key_value channel =
+  U.read_short_string channel
+  >>= fun key ->
+  U.read_long_string channel >>= fun value -> Lwt.return (key, value)
 
-  let int64 = BE.any_int64 >>| Int64.to_int
+let read_int64 channel = Lwt_io.BE.read_int64 channel >|= Int64.to_int
 
-  let pair x y = (x, y)
+let read_key_int channel =
+  U.read_short_string channel
+  >>= fun key -> read_int64 channel >>= fun i -> Lwt.return (key, i)
 
-  let key_value = pair <$> U.Parser.short_string <*> U.Parser.long_string
+let read_key_key channel =
+  U.read_short_string channel
+  >>= fun key ->
+  U.read_short_string channel >>= fun value -> Lwt.return (key, value)
 
-  let key_int = pair <$> U.Parser.short_string <*> int64
+let read_command channel =
+  U.read_uint8 channel
+  >>= function
+  | 0 -> read_key_value channel >|= fun (key, value) -> Set {key; value}
+  | 1 -> U.read_short_string channel >|= fun key -> Get {key}
+  | 2 -> U.read_short_string channel >|= fun key -> Delete {key}
+  | 3 -> Lwt.return Flush
+  | 4 -> Lwt.return Compact
+  | 5 ->
+      read_key_key channel
+      >|= fun (start_key, end_key) -> Keys {start_key; end_key}
+  | 6 ->
+      read_key_key channel
+      >|= fun (start_key, end_key) -> Count {start_key; end_key}
+  | 7 -> read_key_value channel >|= fun (key, value) -> Add {key; value}
+  | 8 -> read_key_value channel >|= fun (key, value) -> Replace {key; value}
+  | 9 ->
+      read_key_value channel
+      >>= fun (key, old_value) ->
+      U.read_long_string channel
+      >|= fun new_value -> CAS {key; old_value; new_value}
+  | 10 -> read_key_key channel >|= fun (key1, key2) -> Swap {key1; key2}
+  | 11 -> read_key_value channel >|= fun (key, value) -> Append {key; value}
+  | 12 -> read_key_value channel >|= fun (key, value) -> Prepend {key; value}
+  | 13 -> read_key_int channel >|= fun (key, value) -> Incr {key; value}
+  | 14 -> read_key_int channel >|= fun (key, value) -> Decr {key; value}
+  | 15 -> U.read_short_string channel >|= fun key -> GetLength {key}
+  | 16 ->
+      U.read_short_string channel
+      >>= fun key ->
+      read_int64 channel
+      >>= fun start ->
+      read_int64 channel >|= fun length -> GetRange {key; start; length}
+  | 17 -> Lwt.return GetStats
+  | n -> failwith @@ "Unknown command tag: " ^ string_of_int n
 
-  let key_key = pair <$> U.Parser.short_string <*> U.Parser.short_string
+let read_request channel =
+  read_int64 channel
+  >>= fun id -> read_command channel >>= fun command -> Lwt.return {id; command}
 
-  let command =
-    any_uint8
-    >>= function
-    | 0 -> key_value >>| fun (key, value) -> Set {key; value}
-    | 1 -> U.Parser.short_string >>| fun key -> Get {key}
-    | 2 -> U.Parser.short_string >>| fun key -> Delete {key}
-    | 3 -> return Flush
-    | 4 -> return Compact
-    | 5 -> key_key >>| fun (start_key, end_key) -> Keys {start_key; end_key}
-    | 6 -> key_key >>| fun (start_key, end_key) -> Count {start_key; end_key}
-    | 7 -> key_value >>| fun (key, value) -> Add {key; value}
-    | 8 -> key_value >>| fun (key, value) -> Replace {key; value}
-    | 9 ->
-        key_value
-        >>= fun (key, old_value) ->
-        U.Parser.long_string >>| fun new_value -> CAS {key; old_value; new_value}
-    | 10 -> key_key >>| fun (key1, key2) -> Swap {key1; key2}
-    | 11 -> key_value >>| fun (key, value) -> Append {key; value}
-    | 12 -> key_value >>| fun (key, value) -> Prepend {key; value}
-    | 13 -> key_int >>| fun (key, value) -> Incr {key; value}
-    | 14 -> key_int >>| fun (key, value) -> Decr {key; value}
-    | 15 -> U.Parser.short_string >>| fun key -> GetLength {key}
-    | 16 ->
-        U.Parser.short_string
-        >>= fun key ->
-        int64
-        >>= fun start -> int64 >>| fun length -> GetRange {key; start; length}
-    | 17 -> return GetStats
-    | n -> failwith @@ "Unknown command tag: " ^ string_of_int n
+let read_result channel =
+  U.read_uint8 channel
+  >>= function
+  | 0 ->
+      U.read_uint8 channel
+      >>= (function
+            | 0 -> Lwt.return Nil
+            | 1 -> U.read_long_string channel >|= fun s -> OneLong s
+            | 2 -> U.read_many_short_strings channel >|= fun ss -> ManyShort ss
+            | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
+      >|= fun value -> Ok value
+  | 1 ->
+      U.read_short_string channel >|= fun error -> Error (ResponseError error)
+  | n -> failwith @@ "Unknown result tag: " ^ string_of_int n
 
-  let request = (fun id command -> {id; command}) <$> int64 <*> command
+let read_response channel =
+  read_int64 channel
+  >>= fun id -> read_result channel >>= fun result -> Lwt.return {id; result}
 
-  let result =
-    any_uint8
-    >>= function
-    | 0 ->
-        any_uint8
-        >>= (function
-              | 0 -> return Nil
-              | 1 -> U.Parser.long_string >>| fun s -> OneLong s
-              | 2 -> U.Parser.many_short_strings >>| fun ss -> ManyShort ss
-              | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
-        >>| fun value -> Ok value
-    | 1 -> U.Parser.short_string >>| fun error -> Error (ResponseError error)
-    | n -> failwith @@ "Unknown result tag: " ^ string_of_int n
+let read reader channel handler =
+  try%lwt
+    let rec loop () = reader channel >>= handler >>= loop in
+    loop ()
+  with
+  | End_of_file
+  | Unix.Unix_error (Unix.EBADF, _, _)
+  | Unix.Unix_error (Unix.ENOTCONN, _, _)
+  | Unix.Unix_error (Unix.ECONNREFUSED, _, _)
+  | Unix.Unix_error (Unix.ECONNRESET, _, _)
+  | Unix.Unix_error (Unix.ECONNABORTED, _, _) ->
+      Lwt.return_unit
 
-  let response = (fun id result -> {id; result}) <$> int64 <*> result
-end
+let read_request = read read_request
 
-let read parser input_channel handler =
-  try%lwt Angstrom_lwt_unix.parse_many parser handler input_channel >|= ignore
-  with Unix.Unix_error (Unix.ECONNRESET, "read", "") -> Lwt.return_unit
-
-let read_request = read Parser.request
-
-let read_response = read Parser.response
+let read_response = read read_response

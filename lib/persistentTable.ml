@@ -130,22 +130,15 @@ let initialize directory =
   open_level_files directory
   >|= fun levels -> {directory; levels; write_mutex = Lwt_mutex.create ()}
 
-let read_exactly input_channel length =
-  let buffer = Bytes.create length in
-  Lwt_io.read_into_exactly input_channel buffer 0 length
-  >|= fun () -> Bytes.unsafe_to_string buffer
-
-let read_uint8 input_channel = Lwt_io.read_char input_channel >|= Char.code
-
 let null_char = Char.chr 0
 
 let trim_key key = String.split_on_char null_char key |> List.hd
 
 let read_key_payload input_channel =
-  read_exactly input_channel key_length >|= trim_key
+  U.read_exactly input_channel key_length >|= trim_key
 
 let read_value_type input_channel =
-  read_uint8 input_channel
+  U.read_uint8 input_channel
   >|= function
   | 0 -> Nothing
   | 1 -> Value ""
@@ -186,7 +179,8 @@ let read_value input_channel {value_type; value_offset; value_size; _} =
   | Value _ ->
       Lwt_io.set_position input_channel value_offset
       >>= fun () ->
-      read_exactly input_channel (Int32.to_int value_size) >|= fun v -> Value v
+      U.read_exactly input_channel (Int32.to_int value_size)
+      >|= fun v -> Value v
 
 let pull_value_from_level (Key key) channel =
   Cursor.read_records_amount channel

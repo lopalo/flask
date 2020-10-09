@@ -10,14 +10,15 @@ let megabytes {bytes} = {megabytes = Float.of_int bytes /. 1024.0 /. 1024.0}
 
 open Lwt.Infix
 
-let write_uint8 oc i = Lwt_io.write_char oc (Char.unsafe_chr i)
+let write_uint8 channel i = Lwt_io.write_char channel (Char.unsafe_chr i)
 
-let write_short_string oc str =
-  write_uint8 oc (String.length str) >>= fun () -> Lwt_io.write oc str
+let write_short_string channel str =
+  write_uint8 channel (String.length str) >>= fun () -> Lwt_io.write channel str
 
-let write_long_string oc str =
-  String.length str |> Int32.of_int |> Lwt_io.BE.write_int32 oc
-  >>= fun () -> Lwt_io.write oc str
+let write_long_string channel str =
+  String.length str |> Int32.of_int
+  |> Lwt_io.BE.write_int32 channel
+  >>= fun () -> Lwt_io.write channel str
 
 let write_many_short_strings channel strings =
   List.length strings |> Int32.of_int
@@ -29,16 +30,29 @@ let write_many_short_strings channel strings =
   in
   loop strings
 
-module Parser = struct
-  open Angstrom
+let read_uint8 channel = Lwt_io.read_char channel >|= Char.code
 
-  let short_string = any_uint8 >>= fun length -> take length
+let read_exactly channel length =
+  let buffer = Bytes.create length in
+  Lwt_io.read_into_exactly channel buffer 0 length
+  >|= fun () -> Bytes.unsafe_to_string buffer
 
-  let long_string = BE.any_int32 >>= fun length -> take (Int32.to_int length)
+let read_short_string channel = read_uint8 channel >>= read_exactly channel
 
-  let many_short_strings =
-    BE.any_int32 >>= fun amount -> count (Int32.to_int amount) short_string
-end
+let read_long_string channel =
+  Lwt_io.BE.read_int32 channel >|= Int32.to_int >>= read_exactly channel
+
+let read_n_times channel read_fun n =
+  let rec f acc = function
+    | 0 -> Lwt.return acc
+    | n -> read_fun channel >>= fun x -> f (x :: acc) (pred n)
+  in
+  f [] n >|= List.rev
+
+let read_many_short_strings channel =
+  Lwt_io.BE.read_int32 channel
+  >|= Int32.to_int
+  >>= read_n_times channel read_short_string
 
 let run_periodically milliseconds f =
   let period = seconds milliseconds in

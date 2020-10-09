@@ -8,6 +8,7 @@ type state =
     number : int;
     fd : Lwt_unix.file_descr;
     output_channel : Lwt_io.output Lwt_io.channel;
+    mutable fsync_is_needed : bool;
     mutable fsync_task : unit Lwt.t * unit Lwt.u }
 
 type t = state ref
@@ -33,40 +34,54 @@ let write_records log pairs =
           | Nothing -> Lwt.return_unit
           | Value v -> U.write_long_string oc v)
         pairs
-      >|= fun () -> fst log_state.fsync_task)
+      >|= fun () ->
+      log_state.fsync_is_needed <- true;
+      fst log_state.fsync_task)
     log_state.output_channel
 
-let record_parser =
-  let open Angstrom in
-  U.Parser.short_string
+let read_record channel =
+  U.read_short_string channel
   >>= fun key ->
-  any_uint8
+  U.read_uint8 channel
   >>= (function
-        | 0 -> return Nothing
-        | 1 -> U.Parser.long_string >>| fun v -> Value v
+        | 0 -> Lwt.return Nothing
+        | 1 -> U.read_long_string channel >|= fun v -> Value v
         | n -> failwith @@ "Unknown value tag: " ^ string_of_int n)
-  >>| fun value -> (Key key, value)
+  >|= fun value -> (Key key, value)
 
-let records_parser =
-  let open Angstrom in
-  any_uint8 >>= fun amount -> count amount record_parser
+let read_records channel =
+  U.read_uint8 channel >>= U.read_n_times channel read_record
 
-let read_file_records reader input_channel =
-  let handler = Lwt_list.iter_s reader in
-  Angstrom_lwt_unix.parse_many records_parser handler input_channel >|= ignore
+let read_record_file reader channel =
+  let rec f () =
+    Lwt.catch
+      (fun () -> read_records channel)
+      (function
+        | End_of_file -> Lwt.return_nil
+        | exn -> Lwt.fail exn)
+    >>= function
+    | [] -> Lwt.return_unit
+    | records -> Lwt_list.iter_s reader records >>= f
+  in
+  f ()
 
-let read_records directory reader =
+let read_record_files directory reader =
   FU.find_ordered_file_names file_extension directory
   >>= fun file_names ->
   let read_file file_name =
-    Lwt_io.(with_file ~mode:input file_name (read_file_records reader))
+    Lwt_io.(with_file ~mode:input file_name (read_record_file reader))
   in
   FU.FileNames.bindings file_names |> List.map snd |> Lwt_list.iter_s read_file
 
 let initialize_state directory =
   FU.open_next_output_file ~replace:false file_extension directory
   >|= fun {fd; output_channel; number; _} ->
-  {directory; number; fd; output_channel; fsync_task = Lwt.wait ()}
+  { directory;
+    number;
+    fd;
+    output_channel;
+    fsync_is_needed = false;
+    fsync_task = Lwt.wait () }
 
 let initialize directory = initialize_state directory >|= ref
 
@@ -75,12 +90,18 @@ let fsync log_state =
     (fun oc ->
       Lwt_io.flush oc
       >>= fun () ->
-      let fsync_resolver = snd log_state.fsync_task in
-      log_state.fsync_task <- Lwt.wait ();
-      Lwt.return fsync_resolver)
+      if log_state.fsync_is_needed then (
+        let fsync_resolver = snd log_state.fsync_task in
+        log_state.fsync_is_needed <- false;
+        log_state.fsync_task <- Lwt.wait ();
+        Lwt.return_some fsync_resolver)
+      else Lwt.return_none)
     log_state.output_channel
-  >>= fun fsync_resolver ->
-  Lwt_unix.fsync log_state.fd >|= fun () -> Lwt.wakeup_later fsync_resolver ()
+  >>= function
+  | Some fsync_resolver ->
+      Lwt_unix.fsync log_state.fd
+      >|= fun () -> Lwt.wakeup_later fsync_resolver ()
+  | None -> Lwt.return_unit
 
 let truncate_files directory current_number () =
   Logs.info (fun m -> m "Remove log files up to #%i" current_number);
