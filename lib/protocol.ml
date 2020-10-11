@@ -149,14 +149,18 @@ let write_response channel {id; result} =
       U.write_uint8 channel 1 >>= fun () -> U.write_short_string channel error
 
 let write_message message_writer channel msg =
-  try%lwt Lwt_io.atomic (fun channel -> message_writer channel msg) channel with
-  | Unix.Unix_error (Unix.EPIPE, _, _)
-  | Unix.Unix_error (Unix.EBADF, _, _)
-  | Unix.Unix_error (Unix.ENOTCONN, _, _)
-  | Unix.Unix_error (Unix.ECONNREFUSED, _, _)
-  | Unix.Unix_error (Unix.ECONNRESET, _, _)
-  | Unix.Unix_error (Unix.ECONNABORTED, _, _) ->
-      Lwt.return_unit
+  Lwt.catch
+    (fun () ->
+      Lwt_io.atomic (fun channel -> message_writer channel msg) channel)
+    (function
+      | Unix.Unix_error (Unix.EPIPE, _, _)
+      | Unix.Unix_error (Unix.EBADF, _, _)
+      | Unix.Unix_error (Unix.ENOTCONN, _, _)
+      | Unix.Unix_error (Unix.ECONNREFUSED, _, _)
+      | Unix.Unix_error (Unix.ECONNRESET, _, _)
+      | Unix.Unix_error (Unix.ECONNABORTED, _, _) ->
+          Lwt.return_unit
+      | exn -> Lwt.fail exn)
 
 let write_request_message = write_message write_request
 
@@ -237,19 +241,20 @@ let read_response channel =
   read_int64 channel
   >>= fun id -> read_result channel >>= fun result -> Lwt.return {id; result}
 
-let read reader channel handler =
-  try%lwt
-    let rec loop () = reader channel >>= handler >>= loop in
-    loop ()
-  with
-  | End_of_file
-  | Unix.Unix_error (Unix.EBADF, _, _)
-  | Unix.Unix_error (Unix.ENOTCONN, _, _)
-  | Unix.Unix_error (Unix.ECONNREFUSED, _, _)
-  | Unix.Unix_error (Unix.ECONNRESET, _, _)
-  | Unix.Unix_error (Unix.ECONNABORTED, _, _) ->
-      Lwt.return_unit
+let make_reader reader_fun channel handler =
+  Lwt.catch
+    (let rec loop () = reader_fun channel >>= handler >>= loop in
+     loop)
+    (function
+      | End_of_file
+      | Unix.Unix_error (Unix.EBADF, _, _)
+      | Unix.Unix_error (Unix.ENOTCONN, _, _)
+      | Unix.Unix_error (Unix.ECONNREFUSED, _, _)
+      | Unix.Unix_error (Unix.ECONNRESET, _, _)
+      | Unix.Unix_error (Unix.ECONNABORTED, _, _) ->
+          Lwt.return_unit
+      | exn -> Lwt.fail exn)
 
-let read_request = read read_request
+let request_reader = make_reader read_request
 
-let read_response = read read_response
+let response_reader = make_reader read_response

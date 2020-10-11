@@ -1,0 +1,1 @@
+strace -fp $(ps -A | grep server.exe | awk '{print $1}') -c

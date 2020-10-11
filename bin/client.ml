@@ -92,7 +92,7 @@ let run_client ~is_interactive ~wait_response host port =
           Lwt_io.(write stdout (format "flask #%i> " !request_id))
         else Lwt.return_unit
       in
-      let reader = P.read_response ic (handle_response write_prefix relay') in
+      let reader = P.response_reader ic (handle_response write_prefix relay') in
       let%lwt () = write_prefix () in
       let rec loop () =
         let%lwt line = Lwt_io.read_line Lwt_io.stdin in

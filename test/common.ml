@@ -79,7 +79,7 @@ let create_client session =
       reader = Lwt.return_unit }
   in
   let reader =
-    P.read_response input_channel (fun r ->
+    P.response_reader input_channel (fun r ->
         cli.responses <- r :: cli.responses;
         Lwt.return_unit)
   in

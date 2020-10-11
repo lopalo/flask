@@ -65,7 +65,8 @@ val write_request_message : Lwt_io.output_channel -> request -> unit Lwt.t
 
 val write_response_message : Lwt_io.output_channel -> response -> unit Lwt.t
 
-val read_request : Lwt_io.input_channel -> (request -> unit Lwt.t) -> unit Lwt.t
+val request_reader :
+  Lwt_io.input_channel -> (request -> unit Lwt.t) -> unit Lwt.t
 
-val read_response :
+val response_reader :
   Lwt_io.input_channel -> (response -> unit Lwt.t) -> unit Lwt.t

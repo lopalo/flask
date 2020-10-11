@@ -39,7 +39,7 @@ let connection_handler state (ic, oc) =
     (* Put back pressure on a client if there're too many concurrent requests from it *)
     if Lwt_pool.wait_queue_length pool > 0 then wait else Lwt.return_unit
   in
-  Proto.read_request ic req_handler
+  Proto.request_reader ic req_handler
 
 let run_read_cache_trimmer state =
   Util.run_periodically {milliseconds = 1000} (fun () ->
