@@ -1,7 +1,7 @@
 module type Record = sig
   type t
 
-  val records_amount_length : int
+  val start_offset : int
 
   val end_offset : int -> Int64.t
 
@@ -15,9 +15,12 @@ module type S = sig
 
   type record
 
-  val make : file_name:string -> Lwt_io.input_channel -> t Lwt.t
-
-  val of_file_name : Lwt_io.file_name -> t Lwt.t
+  val make :
+    file_name:string ->
+    channel:Lwt_io.input_channel ->
+    records_amount:int ->
+    unit ->
+    t Lwt.t
 
   val current_record : t -> record option Lwt.t
 
@@ -37,5 +40,3 @@ module type S = sig
 end
 
 module Make (Record : Record) : S with type record := Record.t
-
-val read_records_amount : Lwt_io.input_channel -> int Lwt.t

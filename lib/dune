@@ -1,5 +1,5 @@
 (library
  (name flask)
- (libraries lwt.unix lru logs)
+ (libraries lwt.unix lru logs bitv)
  (preprocess
   (pps lwt_ppx)))

@@ -3,7 +3,7 @@ open Lwt.Infix
 module type Record = sig
   type t
 
-  val records_amount_length : int
+  val start_offset : int
 
   val end_offset : int -> Int64.t
 
@@ -12,10 +12,6 @@ module type Record = sig
   val key : t -> string
 end
 
-let read_records_amount channel =
-  Lwt_io.set_position channel Int64.zero
-  >>= fun () -> Lwt_io.BE.read_int64 channel >|= Int64.to_int
-
 module Make (Record : Record) = struct
   type t =
     { file_name : string;
@@ -23,16 +19,18 @@ module Make (Record : Record) = struct
       end_offset : int64;
       mutable current_record : Record.t option }
 
-  let make ~file_name channel =
-    read_records_amount channel
-    >|= fun records_amount ->
-    { file_name;
-      channel;
-      end_offset = Record.end_offset records_amount;
-      current_record = None }
+  let reset cursor =
+    cursor.current_record <- None;
+    Lwt_io.set_position cursor.channel (Int64.of_int Record.start_offset)
 
-  let of_file_name file_name =
-    Lwt_io.(open_file ~mode:input file_name) >>= make ~file_name
+  let make ~file_name ~channel ~records_amount () =
+    let cursor =
+      { file_name;
+        channel;
+        end_offset = Record.end_offset records_amount;
+        current_record = None }
+    in
+    reset cursor >|= fun () -> cursor
 
   let current_record ({channel; end_offset; current_record; _} as cursor) =
     let offset = Lwt_io.position channel in
@@ -50,11 +48,6 @@ module Make (Record : Record) = struct
   let file_name {file_name; _} = file_name
 
   let move_forward cursor = cursor.current_record <- None
-
-  let reset cursor =
-    cursor.current_record <- None;
-    Lwt_io.set_position cursor.channel
-      (Int64.of_int Record.records_amount_length)
 
   let with_channel {channel; _} f =
     let offset = Lwt_io.position channel in
@@ -93,9 +86,12 @@ module type S = sig
 
   type record
 
-  val make : file_name:string -> Lwt_io.input_channel -> t Lwt.t
-
-  val of_file_name : Lwt_io.file_name -> t Lwt.t
+  val make :
+    file_name:string ->
+    channel:Lwt_io.input_channel ->
+    records_amount:int ->
+    unit ->
+    t Lwt.t
 
   val current_record : t -> record option Lwt.t
 

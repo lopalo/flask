@@ -13,6 +13,7 @@ depends: [
   "lwt_ppx" {= "2.0.1"}
   "lru" {= "0.3.0"}
   "logs" {= "0.7.0"}
+  "bitv" {= "1.4"}
 
   "alcotest-lwt" {= "1.2.3"}
 
